@@ -1,0 +1,9 @@
+.packer_cache
+.packer_plugins
+*.img
+random
+.DS_Store
+
+.env.local
+.env.local.*
+*.zip

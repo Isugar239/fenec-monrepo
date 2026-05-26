@@ -1,0 +1,33 @@
+# Existing .gitignore content
+# Ignore ROS2 workspace build, log, and install directories
+ros2_ws/build/
+ros2_ws/log/
+ros2_ws/install/
+
+# New entries to prevent OpenRouter/Roo scanning
+# Exclude heavy RTNeural modules directory
+ros2_ws/src/neural_controller/modules/RTNeural/
+# Exclude other large directories if needed
+# (Add specific paths here based on your project structure)bags/
+*.mcap
+*.deb
+*.hef
+*.blend
+*.stl
+*.dae
+bags/
+*.mcap
+*.deb
+*.hef
+*.blend
+*.stl
+*.dae
+ai/llm-ui/live-audio/
+ai/llm-ui/live-audio-original/
+bags/
+*.mcap
+*.deb
+*.hef
+*.blend
+*.stl
+*.dae

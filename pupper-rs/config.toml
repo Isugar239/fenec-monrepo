@@ -1,0 +1,51 @@
+# Configuration for pupper-rs GUI
+
+[battery]
+# Percentage threshold below which battery indicator flashes red
+low_threshold = 15
+# Polling interval in seconds for battery status
+poll_interval_secs = 1.0
+
+[bag_recorder]
+# Polling interval in seconds for bag recording status
+poll_interval_secs = 0.5
+
+[cpu]
+# Enable CPU monitoring (usage and temperature)
+enabled = true
+# Polling interval in seconds for CPU stats
+poll_interval_secs = 2.0
+
+[service]
+# Polling interval in seconds for robot service status
+poll_interval_secs = 1.0
+
+[blink]
+# Interval between blinks in seconds
+interval_secs = 3.0
+# Duration of each blink in seconds
+duration_secs = 0.25
+# Delay between left and right eye blinks in seconds
+eye_delay_secs = 0.02
+
+[eye_tracking]
+# Enable eye tracking
+enabled = true
+# Tracking source: "mouse" or "person" (tracks largest detected person)
+source = "person"
+# Movement mode: "pupils_only", "whole_eye", or "combined"
+mode = "combined"
+# Movement sensitivity (0.0 to 1.0)
+sensitivity = -3.3
+# Maximum distance pupils can move from center
+max_pupil_offset = 25.0
+# Maximum distance whole eye can move from center
+max_eye_offset = 50.0
+# In combined mode, ratio of pupil movement to eye movement (0.0 to 1.0)
+combined_pupil_ratio = 0.4
+
+# UI configuration
+[ui]
+# When true, show a visible button in the center top to toggle the top bar.
+# When false, use an invisible hotzone for a cleaner look.
+toggle_button_visible = false

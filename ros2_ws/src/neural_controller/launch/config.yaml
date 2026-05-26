@@ -1,0 +1,282 @@
+controller_manager:
+  ros__parameters:
+    # Run slightly above nominal 500Hz in order to get exactly 50hz for neural controller
+    # Should develop a better way to handle this in the future
+    update_rate: 520
+
+    neural_controller:
+      type: neural_controller/NeuralController
+
+    neural_controller_three_legged:
+      type: neural_controller/NeuralController
+
+    # Forward command controllers for animation
+    forward_position_controller:
+      type: forward_command_controller/ForwardCommandController
+
+    forward_kp_controller:
+      type: forward_command_controller/ForwardCommandController
+
+    forward_kd_controller:
+      type: forward_command_controller/ForwardCommandController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    imu_sensor_broadcaster:
+      type: imu_sensor_broadcaster/IMUSensorBroadcaster
+
+imu_sensor_broadcaster:
+  ros__parameters:
+    update_rate: 260
+    frame_id: base_link
+    sensor_name: imu_sensor
+
+neural_controller:
+  ros__parameters:
+    repeat_action: 10
+
+    gain_multiplier: 1.0
+    estop_kd: 0.1
+
+    joint_names:
+      [
+        "leg_front_r_1",
+        "leg_front_r_2",
+        "leg_front_r_3",
+        "leg_front_l_1",
+        "leg_front_l_2",
+        "leg_front_l_3",
+        "leg_back_r_1",
+        "leg_back_r_2",
+        "leg_back_r_3",
+        "leg_back_l_1",
+        "leg_back_l_2",
+        "leg_back_l_3",
+      ]
+
+    default_joint_pos:
+      [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
+
+    init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+    init_kds:
+      [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+    init_duration: 1.0
+    fade_in_duration: 1.0
+
+    action_types:
+      [
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+      ]
+
+    max_body_angle: 1.5
+
+    model_path: "$(find-pkg-share neural_controller)/launch/policy_latest.json"
+
+neural_controller_three_legged:
+  ros__parameters:
+    repeat_action: 10
+
+    gain_multiplier: 1.0
+    estop_kd: 0.3
+
+    joint_names:
+      [
+        "leg_front_r_1",
+        "leg_front_r_2",
+        "leg_front_r_3",
+        "leg_front_l_1",
+        "leg_front_l_2",
+        "leg_front_l_3",
+        "leg_back_r_1",
+        "leg_back_r_2",
+        "leg_back_r_3",
+        "leg_back_l_1",
+        "leg_back_l_2",
+        "leg_back_l_3",
+      ]
+
+    default_joint_pos:
+      [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
+
+    init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+    init_kds:
+      [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+
+    init_duration: 2.0
+    fade_in_duration: 2.0
+
+    action_types:
+      [
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+        "position",
+      ]
+
+    max_body_angle: 1.5
+
+    model_path: "$(find-pkg-share neural_controller)/launch/policy_rich-donkey-233_max_reward_19.16.json"
+
+teleop_twist_joy_node:
+  ros__parameters:
+    axis_linear:
+      x: 1
+      y: 0
+    scale_linear:
+      x: 0.75
+      y: 0.5
+
+    axis_angular:
+      yaw: 3
+    scale_angular:
+      yaw: 2.0
+
+    require_enable_button: false
+
+# joy_node:
+#   ros__parameters:
+#     dev: "/dev/input/js0"
+#     autorepeat_rate: 50.0
+#     coalesce_interval_ms: 20
+
+joy_linux_node:
+  ros__parameters:
+    dev: "/dev/input/js0"
+    autorepeat_rate: 50.0
+    coalesce_interval: 0.02
+
+joint_state_broadcaster:
+  ros__parameters:
+    update_rate: 260
+    use_local_topics: false
+
+cmd_vel_mux:
+  ros__parameters:
+    deadband: 0.05
+    joystick_timeout_ms: 500
+
+joy_util_node:
+  ros__parameters:
+    estop_index: 12
+    estop_release_index: 9
+    controller_names: ["neural_controller", "neural_controller_three_legged", "forward_kp_controller", "forward_kd_controller", "forward_position_controller"]
+    switch_button_indices: [0, 1]
+
+# Forward command controllers for animation system
+forward_position_controller:
+  ros__parameters:
+    joints:
+      - leg_front_r_1
+      - leg_front_r_2
+      - leg_front_r_3
+      - leg_front_l_1
+      - leg_front_l_2
+      - leg_front_l_3
+      - leg_back_r_1
+      - leg_back_r_2
+      - leg_back_r_3
+      - leg_back_l_1
+      - leg_back_l_2
+      - leg_back_l_3
+    interface_name: position
+
+forward_kp_controller:
+  ros__parameters:
+    joints:
+      - leg_front_r_1
+      - leg_front_r_2
+      - leg_front_r_3
+      - leg_front_l_1
+      - leg_front_l_2
+      - leg_front_l_3
+      - leg_back_r_1
+      - leg_back_r_2
+      - leg_back_r_3
+      - leg_back_l_1
+      - leg_back_l_2
+      - leg_back_l_3
+    interface_name: kp
+
+forward_kd_controller:
+  ros__parameters:
+    joints:
+      - leg_front_r_1
+      - leg_front_r_2
+      - leg_front_r_3
+      - leg_front_l_1
+      - leg_front_l_2
+      - leg_front_l_3
+      - leg_back_r_1
+      - leg_back_r_2
+      - leg_back_r_3
+      - leg_back_l_1
+      - leg_back_l_2
+      - leg_back_l_3
+    interface_name: kd
+
+animation_controller_py:
+  ros__parameters:
+    joint_names:
+      [
+        "leg_front_r_1",
+        "leg_front_r_2",
+        "leg_front_r_3",
+        "leg_front_l_1",
+        "leg_front_l_2",
+        "leg_front_l_3",
+        "leg_back_r_1",
+        "leg_back_r_2",
+        "leg_back_r_3",
+        "leg_back_l_1",
+        "leg_back_l_2",
+        "leg_back_l_3",
+      ]
+    kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+    kds:
+      [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+    init_kps: [7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5]
+    init_kds:
+      [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+    frame_rate: 40.0 # 1.33x the normal 30fps
+    init_duration: 1.0 # seconds given to reach initial keyframe
+
+joint_state_throttler:
+  ros__parameters:
+    input_topic: "/joint_states"
+    output_topic: "/joint_states_throttled"
+    msgs_per_sec: 10.0
+
+camera:
+  ros__parameters:
+    FrameDurationLimits: [200000, 200000] # 20fps
+    format: "RGB888"
+    width: 1400
+    height: 1050
+
+bag_recorder:
+  ros__parameters:
+    record_start_button: 4 # L1 button
+    record_stop_button: 5 # R1 button
+    bag_output_dir: "~/bags"
+    start_button_hold_duration: 1.0 # 1 second
