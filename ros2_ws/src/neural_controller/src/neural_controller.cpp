@@ -454,12 +454,13 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     tf2::Vector3 world_gravity_vector(0, 0, -1);
     tf2::Vector3 projected_gravity_vector = m.inverse() * world_gravity_vector;
 
-    // If the maximum body angle is exceeded, trigger an emergency stop
-    if (-projected_gravity_vector[2] < cos(params_.max_body_angle)) {
-      estop_active_ = true;
-      RCLCPP_INFO(get_node()->get_logger(), "Emergency stop triggered");
-      return controller_interface::return_type::OK;
-    }
+    // TEMPORARY: IMU fall-detection estop disabled while BNO055 I2C is unreliable.
+    // Re-enable once IMU reads are stable on the control board.
+    // if (-projected_gravity_vector[2] < cos(params_.max_body_angle)) {
+    //   estop_active_ = true;
+    //   RCLCPP_INFO(get_node()->get_logger(), "Emergency stop triggered");
+    //   return controller_interface::return_type::OK;
+    // }
 
     // Fill the observation vector
     // Angular velocity
