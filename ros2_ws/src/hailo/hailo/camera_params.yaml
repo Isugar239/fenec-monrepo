@@ -1,8 +1,7 @@
-# Double Sphere Camera Parameters
 camera_params:
-  fx: 228.81030
-  fy: 228.81030
-  cx: 680.0
-  cy: 479.0
-  xi: -0.00092
-  alpha: 0.62007
+  fx: 1000.0
+  fy: 1000.0
+  cx: 640.0
+  cy: 360.0
+  xi: 0.0
+  alpha: 0.0
