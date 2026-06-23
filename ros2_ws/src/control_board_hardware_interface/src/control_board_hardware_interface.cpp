@@ -275,6 +275,10 @@ bool ControlBoardHardwareInterface::hw_states_contains_nan() {
 hardware_interface::return_type ControlBoardHardwareInterface::read(
     [[maybe_unused]] const rclcpp::Time &time, [[maybe_unused]] const rclcpp::Duration &period) {
   // Write to and read from the actuators
+  spi_command_->flags[0] = 1;
+  spi_command_->flags[1] = 1;
+  spi_command_->flags[2] = 1;
+  spi_command_->flags[3] = 1;
   spi_driver_run();
   copy_actuator_states();
 
@@ -308,21 +312,35 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
     //             imu_packet_timestamp_micros_, imu_measurement_timestamp_micros_,
     //             imu_time_since_measurement_micros_, imu_time_since_measurement_seconds_);
 
-    // Represent IMU orientation as quaternion
-    tf2::Quaternion imu_quat(imu_output.quat.x(), imu_output.quat.y(), imu_output.quat.z(),
-                             imu_output.quat.w());
+    const float quat_norm = imu_output.quat.norm();
+    const float gyro_norm = imu_output.gyro.norm();
+    const bool imu_sample_valid =
+        quat_norm > 0.9f && quat_norm < 1.1f && gyro_norm < 20.0f &&
+        imu_time_since_measurement_seconds_ < 1.0;
 
-    // Applying the offset to the IMU quaternion
-    corrected_quat = imu_quat * imu_manager_.offset_quaternion.inverse();
-    corrected_quat.normalize();
+    if (!imu_sample_valid) {
+      // TEMPORARY: BNO055 I2C returns garbage; assume upright until IMU is fixed.
+      corrected_quat = tf2::Quaternion::getIdentity();
+      angular_velocity = tf2::Vector3(0, 0, 0);
+      linear_acceleration = tf2::Vector3(0, 0, -9.81);
+      imu_time_since_measurement_seconds_ = 0.0;
+    } else {
+      // Represent IMU orientation as quaternion
+      tf2::Quaternion imu_quat(imu_output.quat.x(), imu_output.quat.y(), imu_output.quat.z(),
+                               imu_output.quat.w());
 
-    // Rotating the angular velocity
-    tf2::Vector3 imu_ang_vel(imu_output.gyro.x(), imu_output.gyro.y(), imu_output.gyro.z());
-    angular_velocity = imu_manager_.offset_rotation_matrix * imu_ang_vel;
+      // Applying the offset to the IMU quaternion
+      corrected_quat = imu_quat * imu_manager_.offset_quaternion.inverse();
+      corrected_quat.normalize();
 
-    // Rotating the linear acceleration
-    tf2::Vector3 imu_acc(imu_output.acc.x(), imu_output.acc.y(), imu_output.acc.z());
-    linear_acceleration = imu_manager_.offset_rotation_matrix * imu_acc;
+      // Rotating the angular velocity
+      tf2::Vector3 imu_ang_vel(imu_output.gyro.x(), imu_output.gyro.y(), imu_output.gyro.z());
+      angular_velocity = imu_manager_.offset_rotation_matrix * imu_ang_vel;
+
+      // Rotating the linear acceleration
+      tf2::Vector3 imu_acc(imu_output.acc.x(), imu_output.acc.y(), imu_output.acc.z());
+      linear_acceleration = imu_manager_.offset_rotation_matrix * imu_acc;
+    }
   }
 
   // Updating the state interfaces with corrected values
@@ -360,6 +378,11 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
 
 hardware_interface::return_type ControlBoardHardwareInterface::write(
     const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/) {
+  // Keep motor drivers enabled every control cycle (flags gate torque in spine firmware).
+  spi_command_->flags[0] = 1;
+  spi_command_->flags[1] = 1;
+  spi_command_->flags[2] = 1;
+  spi_command_->flags[3] = 1;
   copy_actuator_commands(true);
   return hardware_interface::return_type::OK;
 }
