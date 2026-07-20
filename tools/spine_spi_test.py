@@ -264,23 +264,39 @@ class BoardResult:
     return lines
 
 
+def _silent_board_result(board: int) -> BoardResult:
+  """Заглушка для отсутствующей платы: без реального SPI-обмена."""
+  raw = bytes(DATA_U32_WORDS * 4)
+  return BoardResult(board=board, device=DEVICES[board], data=SpineData.from_wire(raw))
+
+
 class SpineBus:
-  def __init__(self, speed_hz: int = DEFAULT_SPEED_HZ) -> None:
+  def __init__(
+      self,
+      speed_hz: int = DEFAULT_SPEED_HZ,
+      board0_only: bool = False,
+  ) -> None:
     self.speed_hz = speed_hz
-    self._spi: list[spidev.SpiDev] = []
-    for bus, cs in ((0, 0), (0, 1)):
+    self.board0_only = board0_only
+    self._spi: list[spidev.SpiDev | None] = [None, None]
+    boards = (0,) if board0_only else (0, 1)
+    for board in boards:
+      bus, cs = 0, board
       dev = spidev.SpiDev()
       dev.open(bus, cs)
       dev.mode = 0
       dev.bits_per_word = 8
       dev.max_speed_hz = speed_hz
-      self._spi.append(dev)
+      self._spi[board] = dev
 
   def close(self) -> None:
     for dev in self._spi:
-      dev.close()
+      if dev is not None:
+        dev.close()
 
   def exchange(self, board: int, cmd: SpineCommand) -> BoardResult:
+    if self._spi[board] is None:
+      return _silent_board_result(board)
     tx = cmd.to_wire()
     if len(tx) < MESSAGE_BYTES:
       tx = tx + [0] * (MESSAGE_BYTES - len(tx))
@@ -289,7 +305,11 @@ class SpineBus:
     return BoardResult(board=board, device=DEVICES[board], data=data)
 
   def exchange_both(self, cmd0: SpineCommand, cmd1: SpineCommand) -> list[BoardResult]:
-    return [self.exchange(0, cmd0), self.exchange(1, cmd1)]
+    # При одной STM нельзя долбить CE1: лишний CS на общей шине + риск
+    # рассинхрона/EMI. board0_only → только CE0.
+    r0 = self.exchange(0, cmd0)
+    r1 = self.exchange(1, cmd1) if not self.board0_only else _silent_board_result(1)
+    return [r0, r1]
 
 
 def fmt_status(r: BoardResult) -> str:
@@ -307,11 +327,16 @@ def print_board(r: BoardResult, verbose: bool = False) -> None:
 
 
 def cmd_probe(bus: SpineBus, verbose: bool) -> int:
-  print("=== probe: enable flags, одна транзакция на каждый CE ===\n")
+  scope = "только CE0" if bus.board0_only else "CE0 и CE1"
+  print(f"=== probe: enable flags, {scope} ===\n")
   cmd = SpineCommand.enable_only()
   results = bus.exchange_both(cmd, cmd)
   ok = 0
+  expect = 1 if bus.board0_only else 2
   for r in results:
+    if bus.board0_only and r.board == 1:
+      print(f"[{r.device}] {BOARD_NAMES[r.board]}: skipped (--board0-only)\n")
+      continue
     print_board(r, verbose=verbose)
     print()
     if r.data.checksum_ok and not r.data.all_zero and not r.data.miso_floating:
@@ -320,8 +345,8 @@ def cmd_probe(bus: SpineBus, verbose: bool) -> int:
     print("Ни одна плата не ответила валидным spine-пакетом.")
     print("Проверь: robot.service остановлен, прошивка STM, CE0/CE1, MISO.")
     return 1
-  print(f"Валидный ответ: {ok}/2 плат.")
-  return 0 if ok == 2 else 1
+  print(f"Валидный ответ: {ok}/{expect} плат.")
+  return 0 if ok == expect else 1
 
 
 def cmd_watch(bus: SpineBus, interval: float, count: int, verbose: bool) -> None:
@@ -666,16 +691,16 @@ def cmd_homing_full(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bo
 def cmd_hold_front_left(bus: SpineBus, seconds: float, kp: float, kd: float) -> int:
   """Держит только переднюю левую ногу (CAN ch1 / CE0 leg0). Остальные flags=0."""
   print("=== hold-front-left: удержание передней левой ноги ===\n")
-  print("Только leg0 на CE0. Передняя правая и задние ноги выключены.\n")
+  print("Только CE0 / leg0. Передняя правая и задние ноги выключены.\n")
 
   flags = [1, 0, 0, 0]
   zero_offsets = [0.0] * 12
   n = len(ACTUATORS)
 
+  idle = SpineCommand()
+  idle.flags = [0, 0]
   for _ in range(10):
-    idle = SpineCommand()
-    idle.flags = [0, 0]
-    bus.exchange_both(idle, idle)
+    bus.exchange(0, idle)
     time.sleep(0.01)
 
   pos, _, probe = _read_actuator_states(bus, zero_offsets)
@@ -698,24 +723,26 @@ def cmd_hold_front_left(bus: SpineBus, seconds: float, kp: float, kd: float) -> 
 
   t0 = time.monotonic()
   step = 0
-  idle = SpineCommand()
-  idle.flags = [0, 0]
+  lost = 0
   try:
     while time.monotonic() - t0 < seconds:
       c0 = _global_to_spine_cmd(0, flags, cmd_pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets)
-      bus.exchange_both(c0, idle)
+      r = bus.exchange(0, c0)
       if step % 50 == 0:
-        p, _, r = _read_actuator_states(bus, zero_offsets)
-        knee = p[fl_idx[2]]
-        print(f"  t={time.monotonic() - t0:4.1f}s  leg_front_l_3 knee={knee:.4f}")
-        if not _board_ok(r[0]):
+        print(f"  t={time.monotonic() - t0:4.1f}s  knee={r.data.q_knee[0]:.4f}  {r.data.response_class}")
+      if not _board_ok(r):
+        lost += 1
+        if lost >= 5:
           print("  CE0 потерян — останавливаемся.")
+          bus.exchange(0, idle)
           return 1
+      else:
+        lost = 0
       step += 1
       time.sleep(0.01)
   except KeyboardInterrupt:
     print("\nПрервано — отпускаем моторы.")
-  bus.exchange_both(idle, idle)
+  bus.exchange(0, idle)
   print("\nГотово — моторы отпущены (flags=0).")
   return 0
 
@@ -725,7 +752,9 @@ def cmd_wiggle_front_left(
 ) -> int:
   """Качает колено передней левой ноги туда-сюда вокруг текущей позиции."""
   print("=== wiggle-front-left: колено туда-сюда ===\n")
-  print("Только leg0 / CAN1. Ctrl+C — стоп и отпустить.\n")
+  print("Только CE0 / leg0 / CAN1. Ctrl+C — стоп и отпустить.\n")
+  if not bus.board0_only:
+    print("Подсказка: лучше --board0-only (не трогать CE1).\n")
 
   flags = [1, 0, 0, 0]
   zero_offsets = [0.0] * 12
@@ -736,7 +765,7 @@ def cmd_wiggle_front_left(
   idle = SpineCommand()
   idle.flags = [0, 0]
   for _ in range(10):
-    bus.exchange_both(idle, idle)
+    bus.exchange(0, idle)
     time.sleep(0.01)
 
   pos, _, probe = _read_actuator_states(bus, zero_offsets)
@@ -758,25 +787,131 @@ def cmd_wiggle_front_left(
 
   t0 = time.monotonic()
   step = 0
+  lost = 0
   try:
     while time.monotonic() - t0 < seconds:
       t = time.monotonic() - t0
       cmd_pos[knee_i] = center_knee + amplitude * math.sin(2.0 * math.pi * hz * t)
       cmd_vel[knee_i] = amplitude * 2.0 * math.pi * hz * math.cos(2.0 * math.pi * hz * t)
       c0 = _global_to_spine_cmd(0, flags, cmd_pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets)
-      bus.exchange_both(c0, idle)
+      r = bus.exchange(0, c0)
       if step % 40 == 0:
-        p, _, r = _read_actuator_states(bus, zero_offsets)
-        print(f"  t={t:4.1f}s  cmd={cmd_pos[knee_i]:.3f}  knee={p[knee_i]:.3f}")
-        if not _board_ok(r[0]):
-          print("  CE0 потерян.")
+        print(f"  t={t:4.1f}s  cmd={cmd_pos[knee_i]:.3f}  knee={r.data.q_knee[0]:.3f}  {r.data.response_class}")
+      if not _board_ok(r):
+        lost += 1
+        if lost >= 5:
+          print("  CE0 потерян (5 плохих кадров подряд).")
+          bus.exchange(0, idle)
           return 1
+      else:
+        lost = 0
       step += 1
       time.sleep(0.01)
   except KeyboardInterrupt:
     print("\nПрервано.")
-  bus.exchange_both(idle, idle)
+  bus.exchange(0, idle)
   print("\nСтоп — моторы отпущены.")
+  return 0
+
+
+def cmd_wiggle_can1_all(
+    bus: SpineBus, seconds: float, amplitude: float, hz: float, kp: float, kd: float,
+) -> int:
+  """По очереди качает abad → hip → knee на CAN1 (передняя левая / CE0 leg0)."""
+  print("=== wiggle-can1-all: все 3 мотора CAN1 по очереди ===\n")
+  print("CE0 / leg0: ID1 abad, ID2 hip, ID3 knee. Ctrl+C — стоп.\n")
+
+  flags = [1, 0, 0, 0]
+  zero_offsets = [0.0] * 12
+  n = len(ACTUATORS)
+  fl_idx = [i for i, a in enumerate(ACTUATORS) if a["can_ch"] == 1]
+  joint_names = ("abad", "hip", "knee")
+
+  idle = SpineCommand()
+  idle.flags = [0, 0]
+  for _ in range(15):
+    bus.exchange(0, SpineCommand.enable_only())
+    time.sleep(0.01)
+
+  pos, _, probe = _read_actuator_states(bus, zero_offsets)
+  if not _board_ok(probe[0]):
+    print(f"{probe[0].device}: CE0 не отвечает.")
+    return 1
+  print_board(probe[0])
+  print(
+      f"\nАмплитуда=±{amplitude:.3f} rad, {hz:.2f} Hz, "
+      f"по {seconds:.0f}s на сустав\n"
+  )
+
+  cmd_pos = list(pos)
+  cmd_vel = [0.0] * n
+  cmd_kp = [0.0] * n
+  cmd_kd = [0.0] * n
+  for i in fl_idx:
+    cmd_kp[i] = kp
+    cmd_kd[i] = kd
+
+  try:
+    for j, gi in enumerate(fl_idx):
+      jname = joint_names[j]
+      p_now, _, rr = _read_actuator_states(bus, zero_offsets)
+      if not _board_ok(rr[0]):
+        print("CE0 потерян перед суставом", jname)
+        bus.exchange(0, idle)
+        return 1
+      for ii in fl_idx:
+        cmd_pos[ii] = p_now[ii]
+        cmd_vel[ii] = 0.0
+      center = cmd_pos[gi]
+      print(f"--- {jname} (CAN1 id={j + 1}) center={center:.3f} ---")
+      t0 = time.monotonic()
+      step = 0
+      lost = 0
+      min_fb = center
+      max_fb = center
+      while time.monotonic() - t0 < seconds:
+        t = time.monotonic() - t0
+        cmd_pos[gi] = center + amplitude * math.sin(2.0 * math.pi * hz * t)
+        cmd_vel[gi] = (
+            amplitude * 2.0 * math.pi * hz * math.cos(2.0 * math.pi * hz * t)
+        )
+        c0 = _global_to_spine_cmd(
+            0, flags, cmd_pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets
+        )
+        r = bus.exchange(0, c0)
+        fb = (r.data.q_abad[0], r.data.q_hip[0], r.data.q_knee[0])[j]
+        min_fb = min(min_fb, fb)
+        max_fb = max(max_fb, fb)
+        if step % 40 == 0:
+          print(
+              f"  t={t:4.1f}s  cmd={cmd_pos[gi]:.3f}  fb={fb:.3f}  "
+              f"{r.data.response_class}"
+          )
+        if not _board_ok(r):
+          lost += 1
+          if lost >= 5:
+            print("  CE0 потерян.")
+            bus.exchange(0, idle)
+            return 1
+        else:
+          lost = 0
+        step += 1
+        time.sleep(0.01)
+      cmd_pos[gi] = center
+      cmd_vel[gi] = 0.0
+      for _ in range(20):
+        c0 = _global_to_spine_cmd(
+            0, flags, cmd_pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets
+        )
+        bus.exchange(0, c0)
+        time.sleep(0.01)
+      span = max_fb - min_fb
+      status = "OK" if span > 0.03 else "слабо/нет движения"
+      print(f"  итог {jname}: span={span:.3f} rad  {status}\n")
+  except KeyboardInterrupt:
+    print("\nПрервано.")
+  bus.exchange(0, idle)
+  print("Стоп — моторы отпущены.")
   return 0
 
 
@@ -803,11 +938,16 @@ def build_parser() -> argparse.ArgumentParser:
       epilog=__doc__,
   )
   p.add_argument("--speed", type=int, default=DEFAULT_SPEED_HZ, help="SPI Hz (default 6M)")
+  p.add_argument(
+      "--board0-only",
+      action="store_true",
+      help="Только CE0 (вторая STM выпаяна): не открывать/не тактировать CE1",
+  )
   sub = p.add_subparsers(dest="command", required=True)
 
   sub.add_parser("selftest", help="Проверка кодирования без SPI")
 
-  s = sub.add_parser("probe", help="Один обмен на CE0 и CE1")
+  s = sub.add_parser("probe", help="Один обмен на CE0 (и CE1, если не --board0-only)")
   s.add_argument("-v", "--verbose", action="store_true")
 
   s = sub.add_parser("watch", help="Непрерывный мониторинг")
@@ -827,11 +967,9 @@ def build_parser() -> argparse.ArgumentParser:
   s.add_argument("--kd", type=float, default=0.2)
   s.add_argument("--velocity", type=float, default=0.3, help="qd_des_knee rad/s")
 
-  s = sub.add_parser("homing-full", help="Полный homing 12 суставов, ждёт до конца")
+  s = sub.add_parser("homing-full", help="Полный homing, ждёт до конца")
   s.add_argument("--timeout", type=float, default=180.0, help="секунд")
   s.add_argument("--dt-ms", type=int, default=10, help="шаг цикла, мс")
-  s.add_argument("--board0-only", action="store_true",
-                 help="Только CE0 (передние ноги), пока CE1 не работает")
 
   s = sub.add_parser("hold-front-left",
                      help="Удержать только переднюю левую ногу (рабочую)")
@@ -846,12 +984,29 @@ def build_parser() -> argparse.ArgumentParser:
   s.add_argument("--kp", type=float, default=5.5)
   s.add_argument("--kd", type=float, default=0.5)
 
+  s = sub.add_parser(
+      "wiggle-can1-all",
+      help="По очереди качнуть все 3 мотора CAN1 (abad→hip→knee)",
+  )
+  s.add_argument("--seconds", type=float, default=4.0, help="секунд на каждый сустав")
+  s.add_argument("--amplitude", type=float, default=0.10, help="рад от центра")
+  s.add_argument("--hz", type=float, default=0.4, help="частота Гц")
+  s.add_argument("--kp", type=float, default=5.5)
+  s.add_argument("--kd", type=float, default=0.5)
+
   return p
 
 
 def main() -> int:
   args = build_parser().parse_args()
-  bus = SpineBus(speed_hz=args.speed)
+  # Одна STM: hold/wiggle/homing-full всегда только CE0.
+  board0_only = bool(args.board0_only) or args.command in (
+      "hold-front-left",
+      "wiggle-front-left",
+      "wiggle-can1-all",
+      "homing-full",
+  )
+  bus = SpineBus(speed_hz=args.speed, board0_only=board0_only)
   try:
     if args.command == "selftest":
       return cmd_selftest()
@@ -867,11 +1022,14 @@ def main() -> int:
     if args.command == "homing":
       return cmd_homing(bus, args.seconds, args.kp, args.kd, args.velocity)
     if args.command == "homing-full":
-      return cmd_homing_full(bus, args.timeout, args.dt_ms, args.board0_only)
+      return cmd_homing_full(bus, args.timeout, args.dt_ms, board0_only=True)
     if args.command == "hold-front-left":
       return cmd_hold_front_left(bus, args.seconds, args.kp, args.kd)
     if args.command == "wiggle-front-left":
       return cmd_wiggle_front_left(
+          bus, args.seconds, args.amplitude, args.hz, args.kp, args.kd)
+    if args.command == "wiggle-can1-all":
+      return cmd_wiggle_can1_all(
           bus, args.seconds, args.amplitude, args.hz, args.kp, args.kd)
     return 2
   finally:
