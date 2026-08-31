@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 // #include <lcm/lcm-cpp.hpp>
+#include <errno.h>
 
 unsigned char spi_mode = SPI_MODE_0;
 unsigned char spi_bits_per_word = 8;
@@ -36,6 +37,11 @@ pthread_mutex_t spi_mutex;
 const float max_torque[3] = {3.f, 3.f, 3.f};
 const float wimp_torque[3] = {0.5f, 0.5f, 0.5f};
 const float disabled_torque[3] = {0.f, 0.f, 0.f};
+
+// diagnostic counters and verbose throttle
+static int g_spi_ioctl_fail_count = 0;
+static int g_spi_bad_checksum_count = 0;
+static int g_spi_print_every = 100;  // print verbose info every N driver iterations
 
 // only used for actual robot
 const float abad_side_sign[4] = {-1.f, -1.f, -1.f, -1.f};
@@ -291,8 +297,16 @@ void spine_to_spi(spi_data_t *data, spine_data_t *spine_data, int leg_0) {
 
   uint32_t calc_checksum = xor_checksum((uint32_t *)spine_data, 14);
   if (calc_checksum != (uint32_t)spine_data->checksum) {
-    printf("SPI ERROR BAD CHECKSUM GOT 0x%hx EXPECTED 0x%hx\n", calc_checksum,
-           spine_data->checksum);
+    g_spi_bad_checksum_count++;
+    printf("SPI ERROR BAD CHECKSUM GOT 0x%08x EXPECTED 0x%08x (count=%d)\n", calc_checksum,
+           (uint32_t)spine_data->checksum, g_spi_bad_checksum_count);
+    if ((spi_driver_iterations % g_spi_print_every) == 0) {
+      printf("[RT SPI] RX first words (leg_0=%d): ", leg_0);
+      for (int j = 0; j < 10; j++) {
+        printf("0x%04hx ", ((uint16_t *)spine_data)[j]);
+      }
+      printf("\n");
+    }
   }
   // else {
   //   printf("SPI GOOD CHECKSUM 0x%hx\n", calc_checksum);
@@ -361,7 +375,22 @@ void spi_send_receive(spi_command_t *command, spi_data_t *data) {
 
     // do spi communication
     int rv = ioctl(spi_board == 0 ? spi_1_fd : spi_2_fd, SPI_IOC_MESSAGE(1), &spi_message);
-    (void)rv;
+    if (rv < 0) {
+      g_spi_ioctl_fail_count++;
+      int err = errno;
+      perror("[ERROR] ioctl SPI_IOC_MESSAGE");
+      printf("[RT SPI] ioctl failed (board=%d) rv=%d errno=%d (fail_count=%d)\n", spi_board, rv,
+             err, g_spi_ioctl_fail_count);
+    }
+
+    if ((spi_driver_iterations % g_spi_print_every) == 0) {
+      printf("[RT SPI] spi_driver_iterations=%d board=%d tx first words: ", spi_driver_iterations,
+             spi_board);
+      for (int j = 0; j < 6; j++) {
+        printf("0x%04hx ", tx_buf[j]);
+      }
+      printf("\n");
+    }
 
     // flip bytes the other way
     for (int i = 0; i < 30; i++) {

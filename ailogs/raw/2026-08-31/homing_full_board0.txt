@@ -1,0 +1,14 @@
+=== homing-full: homing ноги 0–1 (CE0) (как robot.service) ===
+
+ВНИМАНИЕ: суставы будут двигаться. Держи робота в безопасном положении.
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.5064 hip= 0.2741 knee= 3.8539  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.5968 hip=-0.0238 knee=-3.9023  qd=(-0.016,-0.016,-0.016) flags=0
+[/dev/spidev0.1] CE1 board1 legs[2,3]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+
+--- фаза 1: homing по стадиям ---
+
+/dev/spidev0.0: потерян spine-ответ на шаге 1 — останавливаемся.

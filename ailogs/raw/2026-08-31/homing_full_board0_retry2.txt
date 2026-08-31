@@ -1,0 +1,29 @@
+=== homing-full: homing ноги 0–1 (CE0) (как robot.service) ===
+
+ВНИМАНИЕ: суставы будут двигаться. Держи робота в безопасном положении.
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.5140 hip= 0.2565 knee= 3.8466  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.5922 hip=-0.0216 knee=-3.8931  qd=(-0.016,-0.016,-0.016) flags=0
+[/dev/spidev0.1] CE1 board1 legs[2,3]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+
+--- фаза 1: homing по стадиям ---
+  Homed [ 5] leg_front_l_3  pos=-3.8676  zero=-3.1576
+  Homed [ 2] leg_front_r_3  pos=3.9683  zero=3.2583
+  t=  0.5s  homed 8/12
+  Homed [ 4] leg_front_l_2  pos=-0.2001  zero=-0.6201
+  Homed [ 1] leg_front_r_2  pos=-0.1211  zero=0.2989
+  Homed [ 0] leg_front_r_1  pos=-0.5877  zero=0.6323
+  Homed [ 3] leg_front_l_1  pos=0.5140  zero=-0.7060
+
+--- фаза 2: возврат в post_homing_position ---
+
+Finished homing! (1.7s, 84 шагов)
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.5133 hip= 0.6186 knee= 3.8691  qd=(-0.016,-0.143,-0.016) flags=0
+    leg1: abad= 0.5644 hip=-0.3050 knee=-3.9366  qd=(-0.016,-0.016,-0.016) flags=0
+[/dev/spidev0.1] CE1 board1 legs[2,3]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0

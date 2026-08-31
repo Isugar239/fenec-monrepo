@@ -25,6 +25,11 @@ const char *RED_ANSI = "\033[1;31m";
 const char *YELLOW_ANSI = "\033[1;33m";
 const char *RESET_ANSI = "\033[0m";
 
+// diagnostics for detecting frozen joint_states
+static std::vector<float> g_prev_hw_positions;
+static int g_no_update_count = 0;
+static int g_read_count = 0;
+
 ControlBoardHardwareInterface::~ControlBoardHardwareInterface() {
   // Release lock if we have it
   if (lock_fd_ != -1) {
@@ -281,6 +286,47 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
   spi_command_->flags[3] = 1;
   spi_driver_run();
   copy_actuator_states();
+
+  // Diagnostics: detect frozen joint states
+  g_read_count++;
+  if (g_prev_hw_positions.size() != hw_state_positions_.size()) {
+    g_prev_hw_positions.assign(hw_state_positions_.begin(), hw_state_positions_.end());
+  } else {
+    bool any_change = false;
+    for (size_t i = 0; i < hw_state_positions_.size(); ++i) {
+      if (std::fabs(hw_state_positions_[i] - g_prev_hw_positions[i]) > 1e-6) {
+        any_change = true;
+        break;
+      }
+    }
+    if (!any_change) {
+      g_no_update_count++;
+      if ((g_no_update_count % 50) == 0) {
+        RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                    "No joint state updates detected for %d consecutive reads (read_count=%d)",
+                    g_no_update_count, g_read_count);
+      }
+    } else {
+      if (g_no_update_count > 0) {
+        RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                    "Joint states resumed updating after %d frozen reads", g_no_update_count);
+      }
+      g_no_update_count = 0;
+    }
+    // copy current positions into prev
+    for (size_t i = 0; i < hw_state_positions_.size(); ++i) {
+      g_prev_hw_positions[i] = hw_state_positions_[i];
+    }
+  }
+
+  // Print spi driver status occasionally
+  if ((g_read_count % 100) == 0) {
+    if (spi_data_) {
+      RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                  "SPI driver status: 0x%08x (read_count=%d)", spi_data_->spi_driver_status,
+                  g_read_count);
+    }
+  }
 
   // Print joint position
   // RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Joint 0: %f",

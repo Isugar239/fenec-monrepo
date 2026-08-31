@@ -40,6 +40,14 @@ def get_battery_voltage(i2c, multiplier=0.0013125):
     return sensor_value * multiplier
 
 
+def try_get_battery_voltage(i2c):
+    try:
+        return get_battery_voltage(i2c)
+    except OSError as e:
+        print(f"Battery I2C read failed: {e}", file=sys.stderr)
+        return None
+
+
 def broadcast_message(message):
     os.system(f'wall "{message}"')
 
@@ -69,6 +77,28 @@ def main():
     CELL_VOLTAGES = [4.05, 3.6, 3.4, 3.3]
     CELL_PERCENTAGES = [100, 66, 33, 0]
 
+    if args.service_mode:
+        while True:
+            time.sleep(10)
+            bat_voltage = try_get_battery_voltage(i2c)
+            if bat_voltage is None:
+                continue
+
+            # Less than 5V indicates pi is connected to a wall power supply
+            if bat_voltage < 5.0:
+                continue
+
+            if bat_voltage < MIN_VOLTAGE:
+                broadcast_message(
+                    f"********WARNING: Battery voltage {bat_voltage:0.2f} is below threshold {MIN_VOLTAGE}!********"
+                )
+            if bat_voltage < SHUTDOWN_VOLTAGE:
+                broadcast_message(
+                    f"********WARNING: Battery voltage {bat_voltage:0.2f} is below threshold {SHUTDOWN_VOLTAGE}! Scheduling a shutdown for 60 seconds from now...********"
+                )
+                os.system("sudo shutdown -h +1")
+        return
+
     bat_voltage = get_battery_voltage(i2c)
     cell_voltage = bat_voltage / NUM_CELLS
     cell_percentage = 100
@@ -86,25 +116,7 @@ def main():
                 )
                 break
 
-    if args.service_mode:
-        while True:
-            time.sleep(10)
-
-            # Less than 5V indicates pi is connected to a wall power supply
-            if bat_voltage < 5.0:
-                continue
-
-            if bat_voltage < MIN_VOLTAGE:
-                broadcast_message(
-                    f"********WARNING: Battery voltage {bat_voltage:0.2f} is below threshold {MIN_VOLTAGE}!********"
-                )
-            if bat_voltage < SHUTDOWN_VOLTAGE:
-                broadcast_message(
-                    f"********WARNING: Battery voltage {bat_voltage:0.2f} is below threshold {SHUTDOWN_VOLTAGE}! Scheduling a shutdown for 60 seconds from now...********"
-                )
-                os.system("sudo shutdown -h +1")
-
-    elif args.percentage_only:
+    if args.percentage_only:
         print(f"{int(cell_percentage)}")
     else:
         print(f"Battery:\t{int(cell_percentage)}%\t{bat_voltage:0.2f}V")

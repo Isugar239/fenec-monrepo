@@ -1,0 +1,5 @@
+=== wiggle-can2-all: все 3 мотора CAN2 по очереди ===
+
+CE0 / leg1: ID1 abad, ID2 hip, ID3 knee. Ctrl+C — стоп.
+
+/dev/spidev0.0: CE0 не отвечает.

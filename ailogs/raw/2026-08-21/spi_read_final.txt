@@ -1,0 +1,10 @@
+=== read: чтение положений суставов ===
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.2596 hip=-0.0284 knee=-0.0544  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+
+[/dev/spidev0.1] CE1 board1 legs[2,3]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+

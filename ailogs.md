@@ -77,3 +77,19 @@ camera_params:
    - Выходной топик детекций в формате ROS 2 `vision_msgs`: `/detections`
    - Для проверки частоты кадров детектора в терминале: `ros2 topic hz /detections`
    - Для визуализации: в Foxglove Studio перетащить топик `/detections` поверх окна `/image`.
+
+---
+
+## Pupper V3 SPI / spine логи
+
+- [2026-08-23: перед power-off — замена DD4 MAX3051](ailogs/2026-08-23_before_dd4_replace_poweroff.md)
+- [2026-08-23: CAN2 частично ожил — jumper TX, wiggle FAIL](ailogs/2026-08-23_can2_fixed_tx_jumper.md)
+- [2026-08-23: перед power-off — jumper TX PB13→DD4 pin1](ailogs/2026-08-23_before_tx_jumper_poweroff.md)
+- [2026-08-22: CAN2 ожил после перепайки TX](ailogs/2026-08-22_can2_fixed_tx_resolder.md)
+- [2026-08-22: перед power-off — прозвон TX/RX CAN2 STM↔DD4](ailogs/2026-08-22_before_txrx_continuity_check_poweroff.md)
+- [2026-08-22: R2 запаян — CAN2 всё ещё мёртв](ailogs/2026-08-22_after_r2_solder_still_dead.md)
+- [2026-08-22: перед power-off — пайка R2 120 Ω на мёртвый CAN2](ailogs/2026-08-22_before_r2_solder_poweroff.md)
+- [2026-08-22: после swap DAP — мёртвость на leg1, вина платы](ailogs/2026-08-22_can_swap_result_board_fault.md)
+- [2026-08-21: CAN1 жив, CAN2 мёртв — перед swap DAP](ailogs/2026-08-21_can1_ok_can2_dead_motor_swap.md)
+- [2026-08-21: шелк CAN1/CAN2 перепутан на PCB](ailogs/HARDWARE_CAN_SILKSCREEN_SWAP.md)
+- [2026-06-30: после `wiggle-front-left` оба CE дают `ALL_ZERO`, `robot.service` снят](ailogs/2026-06-30_spi_all_zero_after_wiggle.md)

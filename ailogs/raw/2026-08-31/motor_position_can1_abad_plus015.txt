@@ -1,0 +1,12 @@
+
+левая / CAN1 / abad: сейчас -0.7326 rad
+
+>>> левая abad: -0.733 → -0.583 rad
+    3...
+    2...
+    1...
+    СМОТРИ!
+
+Плавный ход 2.0s, удержание 1.0s, kp=5.50 kd=0.50. Ctrl+C — отпустить.
+  t= 0.0s  cmd=-0.7326  fb=-0.6975  checksum_OK     t= 0.5s  cmd=-0.7084  fb=-0.7017  checksum_OK     t= 1.0s  cmd=-0.6567  fb=-0.6601  checksum_OK     t= 1.5s  cmd=-0.6054  fb=-0.6136  checksum_OK     t= 2.0s  cmd=-0.5826  fb=-0.5919  checksum_OK     t= 2.5s  cmd=-0.5826  fb=-0.5915  checksum_OK   
+OK: target=-0.5826, fb=-0.5919, error=+0.0092 rad ≤ 0.080. Мотор отпущен.

@@ -1,0 +1,50 @@
+=== wiggle-can1-all: все 3 мотора CAN1 по очереди ===
+
+CE0 / leg0: ID1 abad, ID2 hip, ID3 knee. Ctrl+C — стоп.
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.5064 hip= 0.2741 knee= 3.8542  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.5968 hip=-0.0242 knee=-3.8954  qd=(-0.016,-0.016,-0.016) flags=0
+
+Амплитуда=±0.150 rad, 0.35 Hz, по 4s на сустав
+
+--- abad (CAN1 id=1) center=0.506 ---
+  t= 0.0s  cmd=0.506  fb=-0.506  checksum_OK
+  t= 0.4s  cmd=0.625  fb=-0.506  checksum_OK
+  t= 0.8s  cmd=0.651  fb=-0.506  checksum_OK
+  t= 1.2s  cmd=0.565  fb=-0.506  checksum_OK
+  t= 1.7s  cmd=0.432  fb=-0.506  checksum_OK
+  t= 2.1s  cmd=0.358  fb=-0.506  checksum_OK
+  t= 2.5s  cmd=0.398  fb=-0.506  checksum_OK
+  t= 2.9s  cmd=0.522  fb=-0.506  checksum_OK
+  t= 3.3s  cmd=0.634  fb=-0.506  checksum_OK
+  t= 3.7s  cmd=0.647  fb=-0.506  checksum_OK
+  итог abad: span=1.013 rad  OK
+
+--- hip (CAN1 id=2) center=-0.274 ---
+  t= 0.0s  cmd=-0.274  fb=0.274  checksum_OK
+  t= 0.4s  cmd=-0.156  fb=0.274  checksum_OK
+  t= 0.8s  cmd=-0.129  fb=0.274  checksum_OK
+  t= 1.2s  cmd=-0.215  fb=0.274  checksum_OK
+  t= 1.7s  cmd=-0.347  fb=0.274  checksum_OK
+  t= 2.1s  cmd=-0.422  fb=0.274  checksum_OK
+  t= 2.5s  cmd=-0.382  fb=0.274  checksum_OK
+  t= 2.9s  cmd=-0.258  fb=0.274  checksum_OK
+  t= 3.3s  cmd=-0.147  fb=0.274  checksum_OK
+  t= 3.7s  cmd=-0.133  fb=0.274  checksum_OK
+  итог hip: span=0.548 rad  OK
+
+--- knee (CAN1 id=3) center=-3.854 ---
+  t= 0.0s  cmd=-3.854  fb=3.854  checksum_OK
+  t= 0.4s  cmd=-3.736  fb=3.854  checksum_OK
+  t= 0.8s  cmd=-3.709  fb=3.854  checksum_OK
+  t= 1.2s  cmd=-3.795  fb=3.854  checksum_OK
+  t= 1.7s  cmd=-3.927  fb=3.854  checksum_OK
+  t= 2.1s  cmd=-4.002  fb=3.854  checksum_OK
+  t= 2.5s  cmd=-3.963  fb=3.854  checksum_OK
+  t= 2.9s  cmd=-3.840  fb=3.854  checksum_OK
+  t= 3.3s  cmd=-3.727  fb=3.854  checksum_OK
+  t= 3.7s  cmd=-3.714  fb=3.854  checksum_OK
+  итог knee: span=7.708 rad  OK
+
+Стоп — моторы отпущены.

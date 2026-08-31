@@ -1,0 +1,13 @@
+=== probe: enable flags, CE0 и CE1 ===
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.5064 hip= 0.2741 knee= 3.8542  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.5968 hip=-0.0242 knee=-3.8954  qd=(-0.016,-0.016,-0.016) flags=0
+    raw u32: 0xbf01a400 0x3f18c920 0x3e8c5580 0xbcc67000 0x4076abd8 0xc0794ed8 0xbc821000 0xbc821000 0xbc821000 0xbc821000 0xbc821000 0xbc821000 0x00000000 0x00000000 0x825cada0
+
+[/dev/spidev0.1] CE1 board1 legs[2,3]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    raw u32: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+
+Валидный ответ: 1/2 плат.

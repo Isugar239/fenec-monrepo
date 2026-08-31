@@ -1,0 +1,10 @@
+==== WARMUP CE0 ====
+i=00 class=all_zero all_zero=True csum=True
+i=04 class=all_zero all_zero=True csum=True
+i=09 class=all_zero all_zero=True csum=True
+i=19 class=all_zero all_zero=True csum=True
+CE0 still dead after 20 enable frames
+[/dev/spidev0.0] CE0 board0 legs[0,1]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    raw u32: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000

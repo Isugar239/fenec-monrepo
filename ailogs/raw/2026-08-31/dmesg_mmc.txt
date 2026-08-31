@@ -1,0 +1,61 @@
+[Mon Aug 31 15:48:15 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:48:54 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:50:02 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:50:38 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:51:17 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 15:51:21 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:53:17 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 15:53:22 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:55:02 2026] I/O error, dev mmcblk0, sector 14102024 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 2
+[Mon Aug 31 15:55:34 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 15:56:14 2026] INFO: task kworker/u17:0:38 blocked for more than 120 seconds.
+[Mon Aug 31 15:56:14 2026] INFO: task jbd2/mmcblk0p2-:249 blocked for more than 120 seconds.
+[Mon Aug 31 15:56:14 2026] task:jbd2/mmcblk0p2- state:D stack:0     pid:249   tgid:249   ppid:2      flags:0x00000008
+[Mon Aug 31 15:56:14 2026] INFO: task systemd-journal:311 blocked for more than 120 seconds.
+[Mon Aug 31 15:56:14 2026] INFO: task kworker/0:5:856 blocked for more than 120 seconds.
+[Mon Aug 31 15:56:24 2026] I/O error, dev mmcblk0, sector 16898927 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 2
+[Mon Aug 31 15:56:51 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:56:55 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:57:38 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 15:57:40 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:57:50 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 15:58:18 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 16:01:24 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:01:32 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:02:12 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:02:36 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:02:56 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:03:00 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:03:12 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:03:35 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:03:47 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 16:04:04 2026] I/O error, dev mmcblk0, sector 103047513 op 0x0:(READ) flags 0x80700 phys_seg 4 prio class 2
+[Mon Aug 31 16:04:21 2026] I/O error, dev mmcblk0, sector 45659064 op 0x0:(READ) flags 0x80700 phys_seg 2 prio class 2
+[Mon Aug 31 16:04:44 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 16:05:18 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:05:36 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:08:25 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:08:31 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:08:37 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:08:59 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:09:24 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:09:38 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:09:48 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 16:11:08 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:11:37 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:11:41 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:11:47 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:12:03 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:12:19 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:12:27 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:12:45 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:12:51 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:12:57 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:13:11 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:14:06 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:14:24 2026] mmc0: Card stuck being busy! __mmc_poll_for_busy
+[Mon Aug 31 16:14:26 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:15:02 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:16:49 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:17:42 2026] hwmon hwmon2: Undervoltage detected!
+[Mon Aug 31 16:17:46 2026] hwmon hwmon2: Undervoltage detected!

@@ -1,0 +1,26 @@
+=== homing-full: homing ноги 0–1 (CE0) (как robot.service) ===
+
+ВНИМАНИЕ: суставы будут двигаться. Держи робота в безопасном положении.
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.5171 hip= 0.2516 knee= 3.8489  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.5922 hip=-0.0216 knee=-3.9015  qd=(-0.016,-0.016,-0.016) flags=0
+[/dev/spidev0.1] CE1 board1 legs[2,3]: all_zero
+    leg0: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+
+--- фаза 1: homing по стадиям ---
+  warn фаза1 step=1 CE0 BAD_CHK calc=0x3eae5410 rep=0xbc821000 lost=1
+  Homed [ 2] leg_front_r_3  pos=-0.2516  zero=-0.9616
+  Homed [ 5] leg_front_l_3  pos=-0.5922  zero=0.1178
+  warn фаза1 step=2 CE0 BAD_CHK calc=0x5410822c rep=0x00000000 lost=2
+  Homed [ 1] leg_front_r_2  pos=-576.0000  zero=-575.5800
+  warn фаза1 step=3 CE0 BAD_CHK calc=0x7ad0bf6f rep=0x0000be53 lost=3
+  Homed [ 4] leg_front_l_2  pos=-36893488147419103232.0000  zero=-36893488147419103232.0000
+  warn фаза1 step=4 CE0 BAD_CHK calc=0xb9d43ead rep=0x00000000 lost=4
+  warn фаза1 step=5 CE0 all_zero lost=5
+  warn фаза1 step=6 CE0 all_zero lost=6
+  warn фаза1 step=7 CE0 all_zero lost=7
+  warn фаза1 step=8 CE0 all_zero lost=8
+
+/dev/spidev0.0: потерян spine-ответ (фаза1) — стоп.

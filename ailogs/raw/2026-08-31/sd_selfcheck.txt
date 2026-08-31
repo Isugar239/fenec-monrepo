@@ -1,0 +1,69 @@
+=== storage self-check 2026-08-31 16:22:54 MSK ===
+
+-- identity --
+  [..]   root: /dev/mmcblk0p2 (ext4)
+  [..]   boot disk: /dev/mmcblk0
+  NAME         SIZE TYPE FSTYPE MOUNTPOINT     MODEL TRAN
+  mmcblk0     59.7G disk                             
+  ├─mmcblk0p1  512M part vfat   /boot/firmware       
+  └─mmcblk0p2 59.2G part ext4   /                    
+  [..]   MMC type=SD name=EC1S5 manfid=0x00001b date=12/2023
+  [..]   vendor: Samsung
+  [WARN] boot is microSD, not SSD. Pi 5 + dying/slow SD = long boot and random no-start
+  Filesystem     Type  Size  Used Avail Use% Mounted on
+  /dev/mmcblk0p2 ext4   59G   33G   23G  60% /
+  /dev/mmcblk0p1 vfat  510M   69M  442M  14% /boot/firmware
+
+-- power / throttle --
+  [..]   throttled=0x50000  EXT5V=4.82400000V
+  flags: Under-voltage has occurred this boot, Throttled this boot
+  [WARN] 5V rail 4.824V — marginal (want ~5.1V)
+  [..]   Undervoltage lines this boot (dmesg): 43
+  [FAIL] frequent undervoltage (43). Even short dips stall the SD controller
+
+-- kernel I/O this boot --
+  [..]   mmc Card stuck: 9
+  [..]   mmc I/O errors: 4
+  [..]   jbd2/ext4 hung tasks: 2 / 4
+  [FAIL] SD controller reports card stuck busy (9). Classic dying/fake/undervolted SD
+  [FAIL] block I/O errors on mmcblk (4). Data at risk — clone this card
+  [FAIL] filesystem thread blocked >120s — storage not completing I/O
+
+-- I/O latency (kernel counters since boot) --
+  reads=39285  avg=148.8 ms/IO
+  writes=15379  avg=2780.5 ms/IO
+  [FAIL] average read 149ms (healthy SD is usually <15ms)
+
+-- filesystem --
+  [..]   ext4 state=clean  last_fsck=Tue Nov 19 16:42:52 2024  lifetime_writes=86 GB
+  [OK]   ext4 is clean
+
+-- boot time --
+  Startup finished in 2.037s (kernel) + 1min 48.838s (userspace) = 1min 50.876s 
+  graphical.target reached after 1min 48.801s in userspace.
+  The time when unit became active or started is printed after the "@" character.
+  The time the unit took to start is printed after the "+" character.
+  
+  graphical.target @1min 48.801s
+  └─multi-user.target @1min 48.801s
+    └─wayvnc.service @37.829s +1min 10.970s
+      └─network.target @37.784s
+        └─NetworkManager.service @37.216s +567ms
+
+-- sequential read bench (32 MiB, iflag=direct, timeout 45s) --
+  [..]   healthy UHS-I SD on Pi 5: typically 40–90 MiB/s; <15 MiB/s is bad
+  32+0 records in
+  32+0 records out
+  33554432 bytes (34 MB, 32 MiB) copied, 1.34218 s, 25.0 MB/s
+  [WARN] sequential read 25.0 MB/s is below a healthy UHS-I card
+
+=== verdict ===
+FAIL — storage is not healthy. Clone the card NOW, then replace it.
+Pi 5 is happiest on NVMe (HAT) or a known-good A2/V30 SD (SanDisk High Endurance / Samsung PRO Endurance).
+
+highlights:
+  - WARN: boot is microSD, not SSD. Pi 5 + dying/slow SD = long boot and random no-start
+  - FAIL: frequent undervoltage (43). Even short dips stall the SD controller
+  - FAIL: SD controller reports card stuck busy (9). Classic dying/fake/undervolted SD
+  - FAIL: block I/O errors on mmcblk (4). Data at risk — clone this card
+  - FAIL: filesystem thread blocked >120s — storage not completing I/O

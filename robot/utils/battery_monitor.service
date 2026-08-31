@@ -1,9 +1,12 @@
 [Unit]
 Description=Battery Monitor Service
+After=sys-subsystem-i2c-devices.target
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/bin/python3 /home/pi/pupperv3-monorepo/robot/utils/check_batt_voltage.py --service_mode
 Restart=always
+RestartSec=15
 User=root
 Group=root
 

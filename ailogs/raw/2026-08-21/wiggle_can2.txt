@@ -1,0 +1,29 @@
+=== wiggle-can2-all: все 3 мотора CAN2 по очереди ===
+
+CE0 / leg1: ID1 abad, ID2 hip, ID3 knee. Ctrl+C — стоп.
+
+[/dev/spidev0.0] CE0 board0 legs[0,1]: checksum_OK
+    leg0: abad=-0.2604 hip=-0.0509 knee=-0.0727  qd=(-0.016,-0.016,-0.016) flags=0
+    leg1: abad= 0.0000 hip= 0.0000 knee= 0.0000  qd=( 0.000, 0.000, 0.000) flags=0
+
+Амплитуда=±0.100 rad, 0.40 Hz, по 1s на сустав
+
+--- abad (CAN2 id=1) center=-0.000 ---
+  t= 0.0s  cmd=0.000  fb=0.000  checksum_OK
+  t= 0.4s  cmd=0.086  fb=0.000  checksum_OK
+  t= 0.8s  cmd=0.087  fb=0.000  checksum_OK
+  итог abad: span=0.000 rad  слабо/нет движения
+
+--- hip (CAN2 id=2) center=-0.000 ---
+  t= 0.0s  cmd=0.000  fb=0.000  checksum_OK
+  t= 0.4s  cmd=0.086  fb=0.000  checksum_OK
+  t= 0.8s  cmd=0.087  fb=0.000  checksum_OK
+  итог hip: span=0.000 rad  слабо/нет движения
+
+--- knee (CAN2 id=3) center=-0.000 ---
+  t= 0.0s  cmd=0.000  fb=0.000  checksum_OK
+  t= 0.4s  cmd=0.086  fb=0.000  checksum_OK
+  t= 0.8s  cmd=0.087  fb=0.000  checksum_OK
+  итог knee: span=0.000 rad  слабо/нет движения
+
+Стоп — моторы отпущены.

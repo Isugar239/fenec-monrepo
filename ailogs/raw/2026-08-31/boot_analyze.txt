@@ -1,0 +1,40 @@
+Startup finished in 2.037s (kernel) + 1min 48.838s (userspace) = 1min 50.876s 
+graphical.target reached after 1min 48.801s in userspace.
+
+1min 10.970s wayvnc.service
+ 1min 3.692s systemd-tmpfiles-clean.service
+     34.943s udisks2.service
+     34.873s accounts-daemon.service
+     34.539s hailort.service
+     34.437s avahi-daemon.service
+     34.430s bluetooth.service
+     34.395s systemd-logind.service
+     34.383s dbus.service
+      5.456s systemd-journald.service
+      1.155s user@1000.service
+      1.134s dev-mmcblk0p2.device
+      1.114s cups.service
+       849ms apt-daily-upgrade.service
+       835ms systemd-journal-flush.service
+       598ms systemd-fsck@dev-disk-by\x2dpartuuid-1e184950\x2d01.service
+       567ms NetworkManager.service
+       528ms lightdm.service
+       496ms plymouth-quit-wait.service
+       439ms systemd-udevd.service
+
+The time when unit became active or started is printed after the "@" character.
+The time the unit took to start is printed after the "+" character.
+
+graphical.target @1min 48.801s
+└─multi-user.target @1min 48.801s
+  └─wayvnc.service @37.829s +1min 10.970s
+    └─network.target @37.784s
+      └─NetworkManager.service @37.216s +567ms
+        └─dbus.service @2.801s +34.383s
+          └─basic.target @2.765s
+            └─sockets.target @2.765s
+              └─triggerhappy.socket @2.765s
+                └─sysinit.target @2.762s
+                  └─plymouth-read-write.service @2.345s +416ms
+                    └─local-fs.target @2.318s
+                      └─run-user-1000.mount @37.241s
