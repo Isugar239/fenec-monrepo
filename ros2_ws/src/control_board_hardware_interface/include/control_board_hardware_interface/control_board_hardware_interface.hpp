@@ -4,6 +4,7 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Vector3.h>
 
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,6 +23,8 @@
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 #include "rt/rt_spi.h"
+
+#include <cstddef>
 
 // Overload the << operator for vector and array
 template <typename T>
@@ -83,8 +86,24 @@ class ControlBoardHardwareInterface : public hardware_interface::SystemInterface
   void copy_actuator_states();
   void do_homing();
   bool hw_states_contains_nan();
+  void parse_partial_hardware_params();
+  void apply_spi_flags();
+  bool is_joint_active(std::size_t joint_index) const;
+  void configure_inactive_joints();
+  void log_joint_commands();
 
   int lock_fd_ = -1;  // File descriptor for lock file
+
+  // Partial-hardware mode: enable a subset of CAN channels (front/rear/none)
+  std::string partial_motors_ = "all";
+  bool torque_enable_ = true;
+  bool log_commands_ = false;
+  bool channel_enabled_[4] = {true, true, true, true};
+  double partial_velocity_max_ = 3.0;
+  double partial_effort_max_ = 1.0;
+  double partial_kp_scale_ = 0.5;
+  std::ofstream command_log_;
+  int command_log_count_ = 0;
 
   IMUManager imu_manager_;
 

@@ -7,12 +7,17 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -24,6 +29,27 @@ namespace control_board_hardware_interface {
 const char *RED_ANSI = "\033[1;31m";
 const char *YELLOW_ANSI = "\033[1;33m";
 const char *RESET_ANSI = "\033[0m";
+
+namespace {
+
+std::string to_lower_copy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+bool parse_bool_param(const std::string &value, bool default_value) {
+  const std::string lowered = to_lower_copy(value);
+  if (lowered == "true" || lowered == "1" || lowered == "yes" || lowered == "on") {
+    return true;
+  }
+  if (lowered == "false" || lowered == "0" || lowered == "no" || lowered == "off") {
+    return false;
+  }
+  return default_value;
+}
+
+}  // namespace
 
 // diagnostics for detecting frozen joint_states
 static std::vector<float> g_prev_hw_positions;
@@ -123,6 +149,8 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_init(
   init_spi();
   spi_command_ = get_spi_command();
   spi_data_ = get_spi_data();
+
+  parse_partial_hardware_params();
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -230,18 +258,17 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_activate(
   //     return hardware_interface::CallbackReturn::ERROR;
   //   }
 
-  // Enable actuators. Send the command multiple times to ensure it is received.
+  // Enable actuators on the selected CAN channels only. Repeat to ensure receipt.
+  configure_inactive_joints();
+  apply_spi_flags();
   for (int i = 0; i < 10; i++) {
-    spi_command_->flags[0] = 1;
-    spi_command_->flags[1] = 1;
-    spi_command_->flags[2] = 1;
-    spi_command_->flags[3] = 1;
+    apply_spi_flags();
     spi_driver_run();
   }
   copy_actuator_states();
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  // Homing
+  // Homing (skipped for inactive channels and when torque is disabled)
   do_homing();
 
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Successfully activated!");
@@ -280,10 +307,7 @@ bool ControlBoardHardwareInterface::hw_states_contains_nan() {
 hardware_interface::return_type ControlBoardHardwareInterface::read(
     [[maybe_unused]] const rclcpp::Time &time, [[maybe_unused]] const rclcpp::Duration &period) {
   // Write to and read from the actuators
-  spi_command_->flags[0] = 1;
-  spi_command_->flags[1] = 1;
-  spi_command_->flags[2] = 1;
-  spi_command_->flags[3] = 1;
+  apply_spi_flags();
   spi_driver_run();
   copy_actuator_states();
 
@@ -292,12 +316,20 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
   if (g_prev_hw_positions.size() != hw_state_positions_.size()) {
     g_prev_hw_positions.assign(hw_state_positions_.begin(), hw_state_positions_.end());
   } else {
+    bool any_active = false;
     bool any_change = false;
     for (size_t i = 0; i < hw_state_positions_.size(); ++i) {
+      if (!is_joint_active(i)) {
+        continue;
+      }
+      any_active = true;
       if (std::fabs(hw_state_positions_[i] - g_prev_hw_positions[i]) > 1e-6) {
         any_change = true;
         break;
       }
+    }
+    if (!any_active) {
+      any_change = true;
     }
     if (!any_change) {
       g_no_update_count++;
@@ -424,20 +456,40 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
 
 hardware_interface::return_type ControlBoardHardwareInterface::write(
     const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/) {
-  // Keep motor drivers enabled every control cycle (flags gate torque in spine firmware).
-  spi_command_->flags[0] = 1;
-  spi_command_->flags[1] = 1;
-  spi_command_->flags[2] = 1;
-  spi_command_->flags[3] = 1;
+  // Keep selected motor drivers enabled every control cycle (flags gate torque in spine firmware).
+  apply_spi_flags();
   copy_actuator_commands(true);
+  log_joint_commands();
   return hardware_interface::return_type::OK;
 }
 
 void ControlBoardHardwareInterface::do_homing() {
+  bool any_active = false;
+  for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (is_joint_active(i)) {
+      any_active = true;
+      break;
+    }
+  }
+
+  if (!torque_enable_) {
+    RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "%sTorque disabled; skipping homing. Commands will be logged only.%s", YELLOW_ANSI,
+                RESET_ANSI);
+    return;
+  }
+
+  if (!any_active) {
+    RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "No active CAN channels; skipping homing");
+    return;
+  }
+
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Homing actuators...");
 
   int dt_ms = 10;
 
+  apply_spi_flags();
   std::this_thread::sleep_for(std::chrono::milliseconds(dt_ms));
   copy_actuator_commands();
   spi_driver_run();
@@ -446,12 +498,16 @@ void ControlBoardHardwareInterface::do_homing() {
 
   // Set the initial commands
   for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (!is_joint_active(i)) {
+      continue;
+    }
     hw_command_positions_[i] = hw_state_positions_[i];
     hw_command_velocities_[i] = 0.0;
     hw_command_kps_[i] = 0.0;
     hw_command_kds_[i] = 0.0;
   }
 
+  apply_spi_flags();
   std::this_thread::sleep_for(std::chrono::milliseconds(dt_ms));
   copy_actuator_commands();
   spi_driver_run();
@@ -470,6 +526,9 @@ void ControlBoardHardwareInterface::do_homing() {
     // Set the homing stage to that of the lowest-stage unhomed actuator
     int homing_stage = 999;
     for (auto i = 0u; i < hw_actuator_homing_stages_.size(); i++) {
+      if (!is_joint_active(i)) {
+        continue;
+      }
       if (!hw_actuator_is_homed_[i] && (hw_actuator_homing_stages_[i] < homing_stage)) {
         homing_stage = hw_actuator_homing_stages_[i];
       }
@@ -477,6 +536,9 @@ void ControlBoardHardwareInterface::do_homing() {
     // Check if all actuators are homed
     all_homed = true;
     for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+      if (!is_joint_active(i)) {
+        continue;
+      }
       if (homing_stage < hw_actuator_homing_stages_[i]) {
         hw_command_positions_[i] = hw_state_positions_[i];
         hw_command_velocities_[i] = 0.0;
@@ -488,9 +550,6 @@ void ControlBoardHardwareInterface::do_homing() {
         hw_command_kps_[i] = hw_actuator_homing_kps_[i];
         hw_command_kds_[i] = hw_actuator_homing_kds_[i];
       }
-      // std::cout << "Commanded torque: " << filtered_torques[i] << std::endl;
-      // std::cout << "Current position: " << hw_state_positions_[i] << std::endl;
-      // std::cout << "Commanded position: " << hw_command_positions_[i] << std::endl;
       if (!hw_actuator_is_homed_[i]) {
         filtered_torques[i] =
             (1.0 - alpha) * filtered_torques[i] +
@@ -501,7 +560,8 @@ void ControlBoardHardwareInterface::do_homing() {
           hw_command_positions_[i] = hw_actuator_homed_positions_[i];
           hw_command_velocities_[i] = 0.0;
           hw_actuator_is_homed_[i] = true;
-          RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Homed actuator %d", i);
+          RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Homed actuator %d (%s)",
+                      i, info_.joints[i].name.c_str());
         } else {
           hw_command_positions_[i] += hw_actuator_homing_velocities_[i] * dt_ms * 0.001;
           hw_command_velocities_[i] = hw_actuator_homing_velocities_[i];
@@ -509,6 +569,7 @@ void ControlBoardHardwareInterface::do_homing() {
         }
       }
     }
+    apply_spi_flags();
     copy_actuator_commands();
     spi_driver_run();
     copy_actuator_states();
@@ -519,6 +580,9 @@ void ControlBoardHardwareInterface::do_homing() {
   while (!all_returned) {
     all_returned = true;
     for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+      if (!is_joint_active(i)) {
+        continue;
+      }
       if (hw_command_positions_[i] < hw_actuator_post_homing_positions_[i] - 0.01) {
         hw_command_positions_[i] += std::abs(hw_actuator_homing_velocities_[i]) * dt_ms * 0.001;
         hw_command_velocities_[i] = std::abs(hw_actuator_homing_velocities_[i]);
@@ -532,6 +596,7 @@ void ControlBoardHardwareInterface::do_homing() {
         hw_command_velocities_[i] = 0.0;
       }
     }
+    apply_spi_flags();
     copy_actuator_commands();
     spi_driver_run();
     copy_actuator_states();
@@ -543,25 +608,66 @@ void ControlBoardHardwareInterface::do_homing() {
 }
 
 void ControlBoardHardwareInterface::copy_actuator_commands(bool use_position_limits) {
+  const bool partial_mode = (partial_motors_ != "all");
+
+  // Zero commands on disabled CAN channels so missing motors never receive PD/FF.
+  for (int ch = 0; ch < 4; ++ch) {
+    if (channel_enabled_[ch]) {
+      continue;
+    }
+    spi_command_->q_des_abad[ch] = 0.0f;
+    spi_command_->q_des_hip[ch] = 0.0f;
+    spi_command_->q_des_knee[ch] = 0.0f;
+    spi_command_->qd_des_abad[ch] = 0.0f;
+    spi_command_->qd_des_hip[ch] = 0.0f;
+    spi_command_->qd_des_knee[ch] = 0.0f;
+    spi_command_->kp_abad[ch] = 0.0f;
+    spi_command_->kp_hip[ch] = 0.0f;
+    spi_command_->kp_knee[ch] = 0.0f;
+    spi_command_->kd_abad[ch] = 0.0f;
+    spi_command_->kd_hip[ch] = 0.0f;
+    spi_command_->kd_knee[ch] = 0.0f;
+    spi_command_->tau_abad_ff[ch] = 0.0f;
+    spi_command_->tau_hip_ff[ch] = 0.0f;
+    spi_command_->tau_knee_ff[ch] = 0.0f;
+  }
+
   // Iterate through the joints
   for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (!is_joint_active(i)) {
+      continue;
+    }
+
+    const double vel_limit =
+        partial_mode ? std::min(hw_actuator_velocity_maxs_[i], partial_velocity_max_)
+                     : hw_actuator_velocity_maxs_[i];
+    const double eff_limit =
+        partial_mode ? std::min(hw_actuator_effort_maxs_[i], partial_effort_max_)
+                     : hw_actuator_effort_maxs_[i];
+    const double kp_limit =
+        partial_mode ? hw_actuator_kp_maxs_[i] * partial_kp_scale_ : hw_actuator_kp_maxs_[i];
+
     double cmd_pos = hw_command_positions_[i];
-    double cmd_vel = std::clamp(hw_command_velocities_[i], -hw_actuator_velocity_maxs_[i],
-                                hw_actuator_velocity_maxs_[i]);
-    double cmd_eff = std::clamp(hw_command_efforts_[i], -hw_actuator_effort_maxs_[i],
-                                hw_actuator_effort_maxs_[i]);
-    double cmd_kp = std::clamp(hw_command_kps_[i], 0.0, hw_actuator_kp_maxs_[i]);
+    double cmd_vel = std::clamp(hw_command_velocities_[i], -vel_limit, vel_limit);
+    double cmd_eff = std::clamp(hw_command_efforts_[i], -eff_limit, eff_limit);
+    double cmd_kp = std::clamp(hw_command_kps_[i], 0.0, kp_limit);
     double cmd_kd = std::clamp(hw_command_kds_[i], 0.0, hw_actuator_kd_maxs_[i]);
+
+    if (!torque_enable_) {
+      cmd_kp = 0.0;
+      cmd_kd = 0.0;
+      cmd_eff = 0.0;
+    }
 
     if (use_position_limits && cmd_kp > 0.0) {
       if (cmd_pos < hw_actuator_position_mins_[i]) {
         cmd_pos = hw_actuator_position_mins_[i];
-        cmd_vel = std::clamp(cmd_vel, 0.0, hw_actuator_velocity_maxs_[i]);
-        cmd_eff = std::clamp(cmd_eff, 0.0, hw_actuator_effort_maxs_[i]);
+        cmd_vel = std::clamp(cmd_vel, 0.0, vel_limit);
+        cmd_eff = std::clamp(cmd_eff, 0.0, eff_limit);
       } else if (cmd_pos > hw_actuator_position_maxs_[i]) {
         cmd_pos = hw_actuator_position_maxs_[i];
-        cmd_vel = std::clamp(cmd_vel, -hw_actuator_velocity_maxs_[i], 0.0);
-        cmd_eff = std::clamp(cmd_eff, -hw_actuator_effort_maxs_[i], 0.0);
+        cmd_vel = std::clamp(cmd_vel, -vel_limit, 0.0);
+        cmd_eff = std::clamp(cmd_eff, -eff_limit, 0.0);
       }
       cmd_pos = std::clamp(cmd_pos, hw_actuator_position_mins_[i], hw_actuator_position_maxs_[i]);
     }
@@ -600,6 +706,14 @@ void ControlBoardHardwareInterface::copy_actuator_commands(bool use_position_lim
 void ControlBoardHardwareInterface::copy_actuator_states() {
   // Iterate through the joints
   for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (!is_joint_active(i)) {
+      // Missing motors: follow the commanded trajectory so the 12-DoF policy keeps running.
+      hw_state_positions_[i] = hw_command_positions_[i];
+      hw_state_velocities_[i] = hw_command_velocities_[i];
+      hw_state_efforts_[i] = 0.0;
+      continue;
+    }
+
     float state_pos = hw_state_positions_[i];
     float state_vel = hw_state_velocities_[i];
 
@@ -627,6 +741,177 @@ void ControlBoardHardwareInterface::copy_actuator_states() {
     hw_state_efforts_[i] =
         (hw_command_positions_[i] - hw_state_positions_[i]) * hw_command_kps_[i] +
         (hw_command_velocities_[i] - hw_state_velocities_[i]) * hw_command_kds_[i];
+  }
+}
+
+void ControlBoardHardwareInterface::parse_partial_hardware_params() {
+  if (info_.hardware_parameters.count("partial_motors")) {
+    partial_motors_ = to_lower_copy(info_.hardware_parameters.at("partial_motors"));
+  } else {
+    partial_motors_ = "all";
+  }
+
+  if (info_.hardware_parameters.count("torque_enable")) {
+    torque_enable_ = parse_bool_param(info_.hardware_parameters.at("torque_enable"), true);
+  } else {
+    torque_enable_ = true;
+  }
+
+  channel_enabled_[0] = true;
+  channel_enabled_[1] = true;
+  channel_enabled_[2] = true;
+  channel_enabled_[3] = true;
+
+  if (partial_motors_ == "front") {
+    channel_enabled_[0] = true;   // CAN 1: front left
+    channel_enabled_[1] = true;   // CAN 2: front right
+    channel_enabled_[2] = false;  // CAN 3: back left
+    channel_enabled_[3] = false;  // CAN 4: back right
+  } else if (partial_motors_ == "rear" || partial_motors_ == "back") {
+    channel_enabled_[0] = false;
+    channel_enabled_[1] = false;
+    channel_enabled_[2] = true;
+    channel_enabled_[3] = true;
+  } else if (partial_motors_ == "none" || partial_motors_ == "off" || partial_motors_ == "fake") {
+    channel_enabled_[0] = false;
+    channel_enabled_[1] = false;
+    channel_enabled_[2] = false;
+    channel_enabled_[3] = false;
+  } else if (partial_motors_ != "all") {
+    RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "Unknown partial_motors='%s', defaulting to all", partial_motors_.c_str());
+    partial_motors_ = "all";
+  }
+
+  log_commands_ = (partial_motors_ != "all") || !torque_enable_;
+
+  if (info_.hardware_parameters.count("partial_velocity_max")) {
+    partial_velocity_max_ = std::stod(info_.hardware_parameters.at("partial_velocity_max"));
+  }
+  if (info_.hardware_parameters.count("partial_effort_max")) {
+    partial_effort_max_ = std::stod(info_.hardware_parameters.at("partial_effort_max"));
+  }
+  if (info_.hardware_parameters.count("partial_kp_scale")) {
+    partial_kp_scale_ = std::stod(info_.hardware_parameters.at("partial_kp_scale"));
+  }
+
+  RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+              "%spartial_motors=%s flags=[%d, %d, %d, %d] torque_enable=%s "
+              "(front=CAN1/2, rear=CAN3/4)%s",
+              YELLOW_ANSI, partial_motors_.c_str(), channel_enabled_[0] && torque_enable_,
+              channel_enabled_[1] && torque_enable_, channel_enabled_[2] && torque_enable_,
+              channel_enabled_[3] && torque_enable_, torque_enable_ ? "true" : "false", RESET_ANSI);
+
+  if (partial_motors_ != "all" && torque_enable_) {
+    RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "%sPartial torque is ON. Policy commands assume four legs; keep the robot "
+                "supported and start with torque_enable:=False to log commands first. "
+                "Partial limits: vel<=%.2f rad/s, effort<=%.2f Nm, kp_scale=%.2f%s",
+                RED_ANSI, partial_velocity_max_, partial_effort_max_, partial_kp_scale_,
+                RESET_ANSI);
+  }
+
+  if (log_commands_) {
+    const char *bags_dir = "/home/pi/bags";
+    std::string log_path;
+    std::time_t now = std::time(nullptr);
+    std::tm local_tm{};
+    localtime_r(&now, &local_tm);
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local_tm);
+
+    if (access(bags_dir, W_OK) == 0) {
+      log_path = std::string(bags_dir) + "/partial_motors_commands_" + stamp + ".csv";
+    } else {
+      log_path = std::string("/tmp/partial_motors_commands_") + stamp + ".csv";
+    }
+
+    command_log_.open(log_path, std::ios::out);
+    if (command_log_.is_open()) {
+      command_log_ << "t_sec";
+      for (const auto &joint : info_.joints) {
+        command_log_ << "," << joint.name << "_pos," << joint.name << "_vel," << joint.name
+                     << "_eff," << joint.name << "_kp," << joint.name << "_kd," << joint.name
+                     << "_active";
+      }
+      command_log_ << "\n";
+      RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                  "Logging 12-joint commands to %s", log_path.c_str());
+    } else {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "Failed to open command log file %s", log_path.c_str());
+      log_commands_ = false;
+    }
+  }
+}
+
+void ControlBoardHardwareInterface::apply_spi_flags() {
+  for (int ch = 0; ch < 4; ++ch) {
+    spi_command_->flags[ch] = (channel_enabled_[ch] && torque_enable_) ? 1 : 0;
+  }
+}
+
+bool ControlBoardHardwareInterface::is_joint_active(std::size_t joint_index) const {
+  if (joint_index >= hw_actuator_can_channels_.size()) {
+    return false;
+  }
+  const int can_channel = hw_actuator_can_channels_[joint_index] - 1;
+  if (can_channel < 0 || can_channel > 3) {
+    return false;
+  }
+  return channel_enabled_[can_channel];
+}
+
+void ControlBoardHardwareInterface::configure_inactive_joints() {
+  for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (is_joint_active(i)) {
+      continue;
+    }
+    hw_actuator_is_homed_[i] = true;
+    hw_actuator_zero_positions_[i] = 0.0;
+    hw_state_positions_[i] = hw_actuator_post_homing_positions_[i];
+    hw_state_velocities_[i] = 0.0;
+    hw_state_efforts_[i] = 0.0;
+    hw_command_positions_[i] = hw_actuator_post_homing_positions_[i];
+    hw_command_velocities_[i] = 0.0;
+    hw_command_efforts_[i] = 0.0;
+    hw_command_kps_[i] = 0.0;
+    hw_command_kds_[i] = 0.0;
+    RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "Skipping homing for inactive joint %s (CAN %d id %d); using virtual state",
+                info_.joints[i].name.c_str(), hw_actuator_can_channels_[i],
+                hw_actuator_can_ids_[i]);
+  }
+}
+
+void ControlBoardHardwareInterface::log_joint_commands() {
+  if (!log_commands_) {
+    return;
+  }
+
+  command_log_count_++;
+  const double t_sec = static_cast<double>(command_log_count_) / 520.0;
+
+  if (command_log_.is_open()) {
+    command_log_ << std::fixed << std::setprecision(6) << t_sec;
+    for (auto i = 0u; i < hw_command_positions_.size(); i++) {
+      command_log_ << "," << hw_command_positions_[i] << "," << hw_command_velocities_[i] << ","
+                   << hw_command_efforts_[i] << "," << hw_command_kps_[i] << ","
+                   << hw_command_kds_[i] << "," << (is_joint_active(i) ? 1 : 0);
+    }
+    command_log_ << "\n";
+    if ((command_log_count_ % 50) == 0) {
+      command_log_.flush();
+    }
+  }
+
+  if ((command_log_count_ % 520) == 0) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(3) << "joint commands:";
+    for (auto i = 0u; i < hw_command_positions_.size(); i++) {
+      ss << " " << info_.joints[i].name << "=" << hw_command_positions_[i];
+    }
+    RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "%s", ss.str().c_str());
   }
 }
 

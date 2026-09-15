@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -46,6 +46,25 @@ def generate_launch_description():
         ),
     )
 
+    declare_partial_motors_arg = DeclareLaunchArgument(
+        name="partial_motors",
+        default_value="all",
+        description=(
+            "Which motor groups to enable on real hardware: all, front, rear, or none. "
+            "Example: ros2 launch neural_controller launch.py partial_motors:=front. "
+            "Missing motors are not homed; their states are emulated and all 12 commands are logged."
+        ),
+    )
+
+    declare_torque_enable_arg = DeclareLaunchArgument(
+        name="torque_enable",
+        default_value="True",
+        description=(
+            "If False, enabled CAN channels stay torque-off while all 12 joint commands are logged. "
+            "Use this first with partial_motors:=front before applying torque."
+        ),
+    )
+
     #
     # 2. Construct the path to the URDF file using IfElseSubstitution
 
@@ -64,7 +83,17 @@ def generate_launch_description():
     #
     # 3. Create the robot_description using xacro
     #
-    robot_description_content = Command([PathJoinSubstitution([FindExecutable(name="xacro")]), " ", xacro_file])
+    robot_description_content = Command(
+        [
+            PathJoinSubstitution([FindExecutable(name="xacro")]),
+            " ",
+            xacro_file,
+            " partial_motors:=",
+            LaunchConfiguration("partial_motors"),
+            " torque_enable:=",
+            LaunchConfiguration("torque_enable"),
+        ]
+    )
     robot_description = {"robot_description": robot_description_content}
 
     #
@@ -320,4 +349,23 @@ def generate_launch_description():
     #
     # 8. Return the LaunchDescription with the declared arg + all nodes
     #
-    return LaunchDescription([declare_sim_arg, declare_teleop_arg, declare_bag_recorder_arg, *nodes])
+    partial_motors_info = LogInfo(
+        msg=[
+            "Hardware mode: partial_motors=",
+            LaunchConfiguration("partial_motors"),
+            " torque_enable=",
+            LaunchConfiguration("torque_enable"),
+        ]
+    )
+
+    return LaunchDescription(
+        [
+            declare_sim_arg,
+            declare_teleop_arg,
+            declare_bag_recorder_arg,
+            declare_partial_motors_arg,
+            declare_torque_enable_arg,
+            partial_motors_info,
+            *nodes,
+        ]
+    )

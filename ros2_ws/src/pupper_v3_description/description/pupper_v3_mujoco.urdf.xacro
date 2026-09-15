@@ -1,6 +1,10 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="pupper_v3">
 
+    <!-- Accepted so the same launch args can be passed in sim mode; unused here. -->
+    <xacro:arg name="partial_motors" default="all" />
+    <xacro:arg name="torque_enable" default="true" />
+
     <xacro:include filename="$(find pupper_v3_description)/description/urdf/pupper_v3.edited.fixed.urdf" />
 
     <xacro:include
