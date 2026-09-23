@@ -5,9 +5,10 @@
         <ros2_control name="control_board_hardware_interface" type="system">
             <hardware>
                 <plugin>control_board_hardware_interface/ControlBoardHardwareInterface</plugin>
-                <param name="use_imu">false</param>
+                <param name="use_imu">true</param>
                 <param name="partial_motors">${partial_motors}</param>
                 <param name="torque_enable">${torque_enable}</param>
+                <param name="motor_map_file">/home/pi/pupperv3-monorepo/robot/config/motor_map.yaml</param>
             </hardware>
             <xacro:define_components />
         </ros2_control>

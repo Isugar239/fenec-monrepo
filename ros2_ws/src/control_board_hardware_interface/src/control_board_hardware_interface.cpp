@@ -11,15 +11,21 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include <yaml-cpp/yaml.h>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -123,6 +129,10 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_init(
     hw_actuator_homing_torque_thresholds_.push_back(
         std::stod(joint.parameters.at("homing_torque_threshold")));
     hw_actuator_is_homed_.push_back(false);
+  }
+
+  if (apply_motor_map() != hardware_interface::CallbackReturn::SUCCESS) {
+    return hardware_interface::CallbackReturn::ERROR;
   }
 
   if (info_.hardware_parameters.count("use_imu") &&
@@ -276,12 +286,20 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_activate(
 }
 
 void ControlBoardHardwareInterface::deactivate_motors() {
-  // Disable actuators
-  spi_command_->flags[0] = 0;
-  spi_command_->flags[1] = 0;
-  spi_command_->flags[2] = 0;
-  spi_command_->flags[3] = 0;
-  spi_driver_run();
+  // Один кадр flags=0 STM превращает в Exit и сразу следом шлёт прошлый PD
+  // (kp хоуминга). Без нулевого kp на следующих кадрах hip остаётся держать
+  // момент после остановки процесса.
+  torque_enable_ = false;
+  for (auto i = 0u; i < hw_command_kps_.size(); ++i) {
+    hw_command_kps_[i] = 0.0;
+    hw_command_kds_[i] = 0.0;
+    hw_command_efforts_[i] = 0.0;
+    hw_command_velocities_[i] = 0.0;
+  }
+  std::memset(spi_command_, 0, sizeof(*spi_command_));
+  for (int i = 0; i < 30; ++i) {
+    spi_driver_run();
+  }
 }
 
 hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_error(
@@ -517,12 +535,32 @@ void ControlBoardHardwareInterface::do_homing() {
   // Keep track of filtered torques
   std::vector<double> filtered_torques;
   filtered_torques.resize(hw_state_positions_.size(), 0.0);
+  std::vector<double> homing_start_pos = hw_state_positions_;
+  std::vector<uint8_t> homing_skipped(hw_state_positions_.size(), 0);
+  constexpr double kMinHomingTravel = 0.10;
+  const auto homing_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
   double alpha = 0.5;
 
   // Loop until all actuators are homed
   bool all_homed = false;
   bool all_returned = false;
   while (!all_homed) {
+    if (std::chrono::steady_clock::now() > homing_deadline) {
+      for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+        if (!is_joint_active(i) || hw_actuator_is_homed_[i]) {
+          continue;
+        }
+        homing_skipped[i] = 1;
+        hw_actuator_is_homed_[i] = true;
+        hw_command_kps_[i] = 0.0;
+        hw_command_kds_[i] = 0.0;
+        hw_command_velocities_[i] = 0.0;
+        RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                    "Homing timeout: skipping actuator %d (%s) — нет упора за 90 с, момент снят", i,
+                    info_.joints[i].name.c_str());
+      }
+      break;
+    }
     // Set the homing stage to that of the lowest-stage unhomed actuator
     int homing_stage = 999;
     for (auto i = 0u; i < hw_actuator_homing_stages_.size(); i++) {
@@ -546,6 +584,10 @@ void ControlBoardHardwareInterface::do_homing() {
         hw_command_kds_[i] = 0.0;
         all_homed = false;
         continue;
+      } else if (homing_skipped[i]) {
+        hw_command_kps_[i] = 0.0;
+        hw_command_kds_[i] = 0.0;
+        hw_command_velocities_[i] = 0.0;
       } else {
         hw_command_kps_[i] = hw_actuator_homing_kps_[i];
         hw_command_kds_[i] = hw_actuator_homing_kds_[i];
@@ -556,12 +598,25 @@ void ControlBoardHardwareInterface::do_homing() {
             alpha * ((hw_command_positions_[i] - hw_state_positions_[i]) * hw_command_kps_[i] +
                      (hw_command_velocities_[i] - hw_state_velocities_[i]) * hw_command_kds_[i]);
         if (std::abs(filtered_torques[i]) >= hw_actuator_homing_torque_thresholds_[i]) {
-          hw_actuator_zero_positions_[i] = hw_state_positions_[i] - hw_actuator_homed_positions_[i];
-          hw_command_positions_[i] = hw_actuator_homed_positions_[i];
-          hw_command_velocities_[i] = 0.0;
-          hw_actuator_is_homed_[i] = true;
-          RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Homed actuator %d (%s)",
-                      i, info_.joints[i].name.c_str());
+          const double traveled = std::abs(hw_state_positions_[i] - homing_start_pos[i]);
+          if (traveled < kMinHomingTravel) {
+            homing_skipped[i] = 1;
+            hw_actuator_is_homed_[i] = true;
+            hw_command_kps_[i] = 0.0;
+            hw_command_kds_[i] = 0.0;
+            hw_command_velocities_[i] = 0.0;
+            RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                        "Skipping homing for actuator %d (%s): fb не едет (Δ=%.4f) — ложный упор, "
+                        "момент снят",
+                        i, info_.joints[i].name.c_str(), traveled);
+          } else {
+            hw_actuator_zero_positions_[i] = hw_state_positions_[i] - hw_actuator_homed_positions_[i];
+            hw_command_positions_[i] = hw_actuator_homed_positions_[i];
+            hw_command_velocities_[i] = 0.0;
+            hw_actuator_is_homed_[i] = true;
+            RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                        "Homed actuator %d (%s)", i, info_.joints[i].name.c_str());
+          }
         } else {
           hw_command_positions_[i] += hw_actuator_homing_velocities_[i] * dt_ms * 0.001;
           hw_command_velocities_[i] = hw_actuator_homing_velocities_[i];
@@ -581,6 +636,12 @@ void ControlBoardHardwareInterface::do_homing() {
     all_returned = true;
     for (auto i = 0u; i < hw_state_positions_.size(); i++) {
       if (!is_joint_active(i)) {
+        continue;
+      }
+      if (homing_skipped[i]) {
+        hw_command_kps_[i] = 0.0;
+        hw_command_kds_[i] = 0.0;
+        hw_command_velocities_[i] = 0.0;
         continue;
       }
       if (hw_command_positions_[i] < hw_actuator_post_homing_positions_[i] - 0.01) {
@@ -603,6 +664,23 @@ void ControlBoardHardwareInterface::do_homing() {
 
     // Sleep for dt
     std::this_thread::sleep_for(std::chrono::milliseconds(dt_ms));
+  }
+  RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+              "HOMING_RESULT name CAN id start end delta status hold");
+  for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    const double delta = hw_state_positions_[i] - homing_start_pos[i];
+    const bool moved = std::abs(delta) >= kMinHomingTravel;
+    const bool holding = hw_command_kps_[i] > 0.0;
+    const char *status = "ВЫКЛ";
+    if (is_joint_active(i)) {
+      status = moved ? "ЕХАЛ" : "СТОИТ";
+    }
+    const char *hold = holding ? "ДЕРЖИТ" : "ОТПУЩЕН";
+    RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "HOMING_RESULT %s CAN%d id%d start=%+.3f end=%+.3f d=%+.3f %s %s",
+                info_.joints[i].name.c_str(), hw_actuator_can_channels_[i],
+                hw_actuator_can_ids_[i], homing_start_pos[i], hw_state_positions_[i], delta,
+                status, hold);
   }
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Finished homing!");
 }
@@ -742,6 +820,94 @@ void ControlBoardHardwareInterface::copy_actuator_states() {
         (hw_command_positions_[i] - hw_state_positions_[i]) * hw_command_kps_[i] +
         (hw_command_velocities_[i] - hw_state_velocities_[i]) * hw_command_kds_[i];
   }
+}
+
+hardware_interface::CallbackReturn ControlBoardHardwareInterface::apply_motor_map() {
+  const auto param = info_.hardware_parameters.find("motor_map_file");
+  if (param == info_.hardware_parameters.end() || param->second.empty()) {
+    RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "motor_map_file не задан, CAN id берутся из URDF");
+    return hardware_interface::CallbackReturn::SUCCESS;
+  }
+
+  const std::string &path = param->second;
+  YAML::Node root;
+  try {
+    root = YAML::LoadFile(path);
+  } catch (const std::exception &e) {
+    RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                 "Не читается motor map %s: %s", path.c_str(), e.what());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  if (!root["joints"] || !root["joints"].IsMap()) {
+    RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                 "В %s нет словаря joints", path.c_str());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  const YAML::Node joints = root["joints"];
+  std::set<std::string> urdf_names;
+  for (const auto &joint : info_.joints) {
+    urdf_names.insert(joint.name);
+  }
+  if (joints.size() != urdf_names.size()) {
+    RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                 "В motor map %zu суставов, в URDF %zu", joints.size(), urdf_names.size());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  for (auto it = joints.begin(); it != joints.end(); ++it) {
+    const std::string name = it->first.as<std::string>();
+    if (!urdf_names.count(name)) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "В motor map неизвестный сустав %s", name.c_str());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+  }
+
+  std::set<std::pair<int, int>> used;
+  for (size_t i = 0; i < info_.joints.size(); ++i) {
+    const std::string &name = info_.joints[i].name;
+    const YAML::Node entry = joints[name];
+    if (!entry["can_channel"] || !entry["can_id"]) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "%s: нужны can_channel и can_id", name.c_str());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    int channel = 0;
+    int can_id = 0;
+    try {
+      channel = entry["can_channel"].as<int>();
+      can_id = entry["can_id"].as<int>();
+    } catch (const std::exception &e) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "%s: can_channel/can_id не число (%s)", name.c_str(), e.what());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (channel < 1 || channel > 4 || can_id < 1 || can_id > 3) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "%s: CAN %d id %d вне диапазона (канал 1..4, id 1..3)", name.c_str(), channel,
+                   can_id);
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (!used.insert({channel, can_id}).second) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "%s: CAN %d id %d уже назначен другому суставу", name.c_str(), channel, can_id);
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    const int previous_channel = hw_actuator_can_channels_[i];
+    const int previous_id = hw_actuator_can_ids_[i];
+    hw_actuator_can_channels_[i] = channel;
+    hw_actuator_can_ids_[i] = can_id;
+    if (previous_channel != channel || previous_id != can_id) {
+      RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                  "%s%s: CAN %d id %d → CAN %d id %d%s", YELLOW_ANSI, name.c_str(),
+                  previous_channel, previous_id, channel, can_id, RESET_ANSI);
+    } else {
+      RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "%s: CAN %d id %d",
+                  name.c_str(), channel, can_id);
+    }
+  }
+  return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 void ControlBoardHardwareInterface::parse_partial_hardware_params() {

@@ -10,7 +10,7 @@ from launch.substitutions import (
     IfElseSubstitution,
 )
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterFile
+from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition, UnlessCondition
 
@@ -94,7 +94,9 @@ def generate_launch_description():
             LaunchConfiguration("torque_enable"),
         ]
     )
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {
+        "robot_description": ParameterValue(robot_description_content, value_type=str)
+    }
 
     #
     # 4. Robot State Publisher

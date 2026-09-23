@@ -13,3 +13,5 @@
 При отладке всегда уточнять: **шелк или софт?**
 
 См. полный лог теста: [2026-08-21_can1_ok_can2_dead_motor_swap.md](2026-08-21_can1_ok_can2_dead_motor_swap.md)
+
+Отдельно (2026-09-16): CAN **id моторов 1/2/3** тоже не совпадают с abad/hip/knee на железе; примеры `spine_spi_test.py` из терминала при этом едут — [2026-09-16_motor_ids_swapped.md](2026-09-16_motor_ids_swapped.md).

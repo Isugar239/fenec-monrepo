@@ -1,0 +1,28 @@
+# Какой мотор крутит сустав модели.
+# can_id — id из Motor Wizard (1, 2 или 3 на своей шине).
+# Имя сустава остаётся осью модели: _1 abad, _2 hip, _3 knee.
+# Знак хоуминга и лимиты остаются у сустава, здесь только адрес мотора.
+#
+# Сейчас карта как в URDF. По зажатию после хоуминга 2026-09-22 подозрение,
+# его в файл не вписано — следующий старт robot.service сразу хоумит:
+#   передняя левая: abad и hip местами (id 1 ↔ 2)
+#     leg_front_l_1 can_id: 2
+#     leg_front_l_2 can_id: 1
+#   задняя правая: abad и колено местами (id 1 ↔ 3)
+#     leg_back_r_1 can_id: 3
+#     leg_back_r_3 can_id: 1
+# Передняя правая совпала с моделью. Задняя левая на шине не ответила.
+
+joints:
+  leg_front_r_1: {can_channel: 2, can_id: 1}
+  leg_front_r_2: {can_channel: 2, can_id: 2}
+  leg_front_r_3: {can_channel: 2, can_id: 3}
+  leg_front_l_1: {can_channel: 1, can_id: 1}
+  leg_front_l_2: {can_channel: 1, can_id: 2}
+  leg_front_l_3: {can_channel: 1, can_id: 3}
+  leg_back_r_1: {can_channel: 4, can_id: 1}
+  leg_back_r_2: {can_channel: 4, can_id: 2}
+  leg_back_r_3: {can_channel: 4, can_id: 3}
+  leg_back_l_1: {can_channel: 3, can_id: 1}
+  leg_back_l_2: {can_channel: 3, can_id: 2}
+  leg_back_l_3: {can_channel: 3, can_id: 3}

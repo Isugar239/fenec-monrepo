@@ -4,11 +4,12 @@
     <xacro:macro name="define_components">
 
 
+        <!-- Сначала задние ноги (stage 0-2), потом передние (stage 3-5). -->
         <joint name="leg_front_r_1">
             <param name="can_channel">2</param>
             <param name="can_id">1</param>
 
-            <param name="homing_stage">2</param>
+            <param name="homing_stage">5</param>
             <param name="homing_velocity">-1.5</param>
             <param name="homed_position">-1.22</param>
             <param name="post_homing_position">0.0</param>
@@ -37,7 +38,7 @@
             <param name="can_channel">2</param>
             <param name="can_id">2</param>
 
-            <param name="homing_stage">1</param>
+            <param name="homing_stage">4</param>
             <param name="homing_velocity">-1.5</param>
             <param name="homed_position">-0.42</param>
             <param name="post_homing_position">0.0</param>
@@ -66,7 +67,7 @@
             <param name="can_channel">2</param>
             <param name="can_id">3</param>
 
-            <param name="homing_stage">0</param>
+            <param name="homing_stage">3</param>
             <param name="homing_velocity">1.5</param>
             <param name="homed_position">0.71</param>
             <param name="post_homing_position">0.71</param>
@@ -95,7 +96,7 @@
             <param name="can_channel">1</param>
             <param name="can_id">1</param>
 
-            <param name="homing_stage">2</param>
+            <param name="homing_stage">5</param>
             <param name="homing_velocity">1.5</param>
             <param name="homed_position">1.22</param>
             <param name="post_homing_position">0.0</param>
@@ -124,7 +125,7 @@
             <param name="can_channel">1</param>
             <param name="can_id">2</param>
 
-            <param name="homing_stage">1</param>
+            <param name="homing_stage">4</param>
             <param name="homing_velocity">1.5</param>
             <param name="homed_position">0.42</param>
             <param name="post_homing_position">0.0</param>
@@ -153,7 +154,7 @@
             <param name="can_channel">1</param>
             <param name="can_id">3</param>
 
-            <param name="homing_stage">0</param>
+            <param name="homing_stage">3</param>
             <param name="homing_velocity">-1.5</param>
             <param name="homed_position">-0.71</param>
             <param name="post_homing_position">-0.71</param>
@@ -355,7 +356,7 @@
 
         <sensor name="imu_sensor">
             <param name="yaw">0</param>
-            <param name="pitch">-2.35619</param>
+            <param name="pitch">-1.57079632679</param>
             <param name="roll">0</param>
 
             <state_interface name="orientation.x"/>

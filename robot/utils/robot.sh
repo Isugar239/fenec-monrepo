@@ -2,5 +2,6 @@
 
 source /opt/ros/jazzy/setup.bash
 source /home/pi/pupperv3-monorepo/ros2_ws/install/local_setup.bash
-ros2 launch neural_controller launch.py
+# Все 12 суставов. Канал без движения энкодера пропускается, момент с него снимается.
+ros2 launch neural_controller launch.py partial_motors:=all
 

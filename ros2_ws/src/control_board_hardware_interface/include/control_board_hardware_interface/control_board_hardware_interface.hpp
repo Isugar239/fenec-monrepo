@@ -87,6 +87,7 @@ class ControlBoardHardwareInterface : public hardware_interface::SystemInterface
   void do_homing();
   bool hw_states_contains_nan();
   void parse_partial_hardware_params();
+  hardware_interface::CallbackReturn apply_motor_map();
   void apply_spi_flags();
   bool is_joint_active(std::size_t joint_index) const;
   void configure_inactive_joints();

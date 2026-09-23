@@ -14,8 +14,13 @@
   sudo python3 spine_spi_test.py watch
   sudo python3 spine_spi_test.py enable
   sudo python3 spine_spi_test.py read
-  sudo python3 spine_spi_test.py homing --seconds 3
-  sudo python3 spine_spi_test.py homing-full --timeout 180
+  sudo python3 spine_spi_test.py homing          # отказ (рвёт к q=0)
+  sudo python3 spine_spi_test.py homing-full     # копия ROS do_homing, только CE0
+
+Знаки как в rt_spi.cpp (все −1). Штатный homing: sudo systemctl restart robot
+(это процесс на Pi, STM/плату не ресетит).
+
+  sudo python3 spine_spi_test.py motor-scan      # все 6 передних: ±0.5 rad, кто едет
 
 Перед тестом: sudo systemctl stop robot.service
 """
@@ -31,6 +36,7 @@ import time
 from dataclasses import dataclass, field
 
 import spidev
+import yaml
 
 WORDS_PER_MESSAGE = 66
 CMD_U32_WORDS = 33
@@ -54,32 +60,32 @@ DEFAULT_SPEED_HZ = 6_000_000
 DEVICES = ("/dev/spidev0.0", "/dev/spidev0.1")
 BOARD_NAMES = ("CE0 board0 legs[0,1]", "CE1 board1 legs[2,3]")
 
-# Совпадаем с control_board_hardware_interface: без дополнительных инверсий осей.
-ABAD_SIDE_SIGN = [1.0, 1.0, 1.0, 1.0]
-HIP_SIDE_SIGN = [1.0, 1.0, 1.0, 1.0]
-KNEE_SIDE_SIGN = [1.0, 1.0, 1.0, 1.0]
+# Как rt_spi.cpp: abad/hip/knee_side_sign[] = −1 на всех ногах.
+ABAD_SIDE_SIGN = [-1.0, -1.0, -1.0, -1.0]
+HIP_SIDE_SIGN = [-1.0, -1.0, -1.0, -1.0]
+KNEE_SIDE_SIGN = [-1.0, -1.0, -1.0, -1.0]
 ABAD_OFFSET = [0.0, 0.0, 0.0, 0.0]
 HIP_OFFSET = [0.0, 0.0, 0.0, 0.0]
 KNEE_OFFSET = [0.0, 0.0, 0.0, 0.0]
 
 # Порядок как в components.xacro / ControlBoardHardwareInterface
 ACTUATORS = (
-    {"name": "leg_front_r_1", "can_ch": 2, "can_id": 1, "homing_stage": 2,
+    {"name": "leg_front_r_1", "can_ch": 2, "can_id": 1, "homing_stage": 5,
      "homing_velocity": -1.5, "homed_position": -1.22, "post_homing_position": 0.0,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
-    {"name": "leg_front_r_2", "can_ch": 2, "can_id": 2, "homing_stage": 1,
+    {"name": "leg_front_r_2", "can_ch": 2, "can_id": 2, "homing_stage": 4,
      "homing_velocity": -1.5, "homed_position": -0.42, "post_homing_position": 0.0,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
-    {"name": "leg_front_r_3", "can_ch": 2, "can_id": 3, "homing_stage": 0,
+    {"name": "leg_front_r_3", "can_ch": 2, "can_id": 3, "homing_stage": 3,
      "homing_velocity": 1.5, "homed_position": 0.71, "post_homing_position": 0.71,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
-    {"name": "leg_front_l_1", "can_ch": 1, "can_id": 1, "homing_stage": 2,
+    {"name": "leg_front_l_1", "can_ch": 1, "can_id": 1, "homing_stage": 5,
      "homing_velocity": 1.5, "homed_position": 1.22, "post_homing_position": 0.0,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
-    {"name": "leg_front_l_2", "can_ch": 1, "can_id": 2, "homing_stage": 1,
+    {"name": "leg_front_l_2", "can_ch": 1, "can_id": 2, "homing_stage": 4,
      "homing_velocity": 1.5, "homed_position": 0.42, "post_homing_position": 0.0,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
-    {"name": "leg_front_l_3", "can_ch": 1, "can_id": 3, "homing_stage": 0,
+    {"name": "leg_front_l_3", "can_ch": 1, "can_id": 3, "homing_stage": 3,
      "homing_velocity": -1.5, "homed_position": -0.71, "post_homing_position": -0.71,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
     {"name": "leg_back_r_1", "can_ch": 4, "can_id": 1, "homing_stage": 2,
@@ -101,6 +107,37 @@ ACTUATORS = (
      "homing_velocity": -1.5, "homed_position": -0.71, "post_homing_position": -0.71,
      "homing_kp": 5.5, "homing_kd": 0.2, "homing_torque_threshold": 2.0},
 )
+
+MOTOR_MAP_PATH = "/home/pi/pupperv3-monorepo/robot/config/motor_map.yaml"
+
+
+def apply_motor_map(path: str = MOTOR_MAP_PATH) -> None:
+    """Подменяет can_ch/can_id из robot/config/motor_map.yaml. Хоуминг остаётся у сустава."""
+    with open(path, encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    joints = data.get("joints") if isinstance(data, dict) else None
+    if not isinstance(joints, dict):
+        raise SystemExit(f"{path}: нет словаря joints")
+    by_name = {actuator["name"]: actuator for actuator in ACTUATORS}
+    if set(joints) != set(by_name):
+        missing = sorted(set(by_name) - set(joints))
+        extra = sorted(set(joints) - set(by_name))
+        raise SystemExit(f"{path}: missing={missing} extra={extra}")
+    seen: set[tuple[int, int]] = set()
+    for name, spec in joints.items():
+        channel = int(spec["can_channel"])
+        can_id = int(spec["can_id"])
+        if channel not in (1, 2, 3, 4) or can_id not in (1, 2, 3):
+            raise SystemExit(f"{path}: {name} CAN {channel} id {can_id} вне диапазона")
+        key = (channel, can_id)
+        if key in seen:
+            raise SystemExit(f"{path}: CAN {channel} id {can_id} назначен дважды")
+        seen.add(key)
+        by_name[name]["can_ch"] = channel
+        by_name[name]["can_id"] = can_id
+
+
+apply_motor_map()
 
 
 def xor_checksum_u32(words: list[int], n_words: int) -> int:
@@ -314,6 +351,14 @@ class SpineBus:
     return [r0, r1]
 
 
+def _disable_motors(bus: SpineBus) -> None:
+  idle = SpineCommand()
+  idle.flags = [0, 0]
+  bus.exchange(0, idle)
+  if not bus.board0_only:
+    bus.exchange(1, idle)
+
+
 def fmt_status(r: BoardResult) -> str:
   return f"[{r.device}] {BOARD_NAMES[r.board]}: {r.data.response_class}"
 
@@ -401,65 +446,22 @@ def cmd_read(bus: SpineBus, repeat: int) -> int:
 
 
 def cmd_homing(bus: SpineBus, seconds: float, kp: float, kd: float, velocity: float) -> int:
-  """Упрощённый homing-тест: enable + медленное вращение knee с PD."""
-  print("=== homing: enable → read → slow knee sweep → read ===\n")
-  print("ВНИМАНИЕ: суставы могут чуть двинуться. Держи робота в безопасном положении.\n")
-
-  enable = SpineCommand.enable_only()
-  for _ in range(10):
-    bus.exchange_both(enable, enable)
-    time.sleep(0.01)
-
-  baseline = bus.exchange_both(enable, enable)
-  for r in baseline:
-    print_board(r)
-    if not r.data.checksum_ok:
-      print(
-          f"\n{r.device}: checksum не сходится — STM не принимает/не отвечает корректно. "
-          "Homing не запускаем."
-      )
-      return 1
-
-  print("\n--- отправка homing-команды (knee qd_des, kp/kd как у робота) ---")
-  t0 = time.monotonic()
-  step = 0
-  while time.monotonic() - t0 < seconds:
-    cmd0 = SpineCommand.enable_only()
-    cmd1 = SpineCommand.enable_only()
-    for cmd in (cmd0, cmd1):
-      cmd.flags = [1, 1]
-      cmd.kp_knee = [kp, kp]
-      cmd.kd_knee = [kd, kd]
-      cmd.qd_des_knee = [velocity, velocity]
-    results = bus.exchange_both(cmd0, cmd1)
-    if step % 10 == 0:
-      print(f"  t={time.monotonic() - t0:4.1f}s  " + " | ".join(
-          f"leg1_knee={r.data.q_knee[1]:.4f}" for r in results))
-    step += 1
-    time.sleep(0.01)
-
-  print("\n--- после homing ---")
-  final = bus.exchange_both(enable, enable)
-  changed = False
-  for b, (a, z) in enumerate(zip(baseline, final)):
-    for leg in (0, 1):
-      for name, va, vz in (
-          ("abad", a.data.q_abad[leg], z.data.q_abad[leg]),
-          ("hip", a.data.q_hip[leg], z.data.q_hip[leg]),
-          ("knee", a.data.q_knee[leg], z.data.q_knee[leg]),
-      ):
-        delta = abs(vz - va)
-        if delta > 0.001 and not (math.isnan(va) or math.isnan(vz)):
-          changed = True
-          print(f"  board{b} leg{leg} {name}: {va:.4f} -> {vz:.4f}  (Δ={delta:.4f})")
-    print_board(z)
-    print()
-
-  if changed:
-    print("Позиции изменились — STM принимает команды и шина CAN/моторы, возможно, живы.")
-    return 0
-  print("Позиции НЕ изменились — команда не дошла до моторов или обратная связь мертва.")
-  return 1
+  """Не homing робота. Старая реализация рвала колена к q_des=0 — больше не шлём."""
+  del seconds, kp, kd, velocity, bus
+  print("СТОП: `homing` — это НЕ homing при старте Pi.")
+  print()
+  print("При boot homing делает robot.service (ControlBoardHardwareInterface::do_homing):")
+  print("  q_des = текущая позиция, потом медленный упор, потом post_homing.")
+  print()
+  print("Эта команда раньше ставила q_des_knee=0 и kp=5.5 на обе STM.")
+  print("Моторы рвались к нулю, часть уезжала в упор и потом не слушала wiggle")
+  print("(залипали на последней PD-команде).")
+  print()
+  print("Нужен штатный homing:")
+  print("  sudo systemctl start robot.service")
+  print("Не запускай `homing-full`, пока CAN id 1/2/3 не совпадают с суставами.")
+  print("После срыва — силовой цикл моторов (не только reboot Pi).")
+  return 2
 
 
 def _spine_to_global_leg(data: SpineData, local_leg: int, global_leg: int,
@@ -552,11 +554,19 @@ def _board_ok(r: BoardResult) -> bool:
 
 
 def cmd_homing_full(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bool) -> int:
-  """Полный homing как ControlBoardHardwareInterface::do_homing — ждёт до конца."""
-  scope = "ноги 0–1 (CE0)" if board0_only else "все 12 суставов"
-  print(f"=== homing-full: homing {scope} (как robot.service) ===\n")
-  print("ВНИМАНИЕ: суставы будут двигаться. Держи робота в безопасном положении.\n")
+  """Копия ROS do_homing по CE0. Плату/STM не ресетит."""
+  print("=== homing-full: CE0, знаки как rt_spi.cpp (−1), ложный упор → SKIP ===\n")
+  print("Ноги в воздухе, не в упоре. Ctrl+C — отпустить момент.")
+  print("Левый abad id=1 с fb=0 будет SKIP, не Homed.")
+  print()
+  try:
+    return _cmd_homing_full_body(bus, timeout_s, dt_ms, board0_only)
+  finally:
+    _disable_motors(bus)
+    print("Моторы отпущены (flags=0).")
 
+
+def _cmd_homing_full_body(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bool) -> int:
   for _ in range(40):
     bus.exchange_both(SpineCommand.enable_only(), SpineCommand.enable_only())
     time.sleep(0.01)
@@ -584,11 +594,13 @@ def cmd_homing_full(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bo
   cmd_vel = [0.0] * n
   cmd_kp = [0.0] * n
   cmd_kd = [0.0] * n
-  flags = [1, 1, 1, 1]
+  skipped = [False] * n
+  flags = [1, 1, 0, 0] if board0_only else [1, 1, 1, 1]
 
   state_pos, state_vel, _ = _read_actuator_states(bus, zero_offsets)
   for i in range(n):
     cmd_pos[i] = state_pos[i]
+  start_pos = list(state_pos)
   time.sleep(dt_ms * 0.001)
 
   filtered_torque = [0.0] * n
@@ -651,11 +663,26 @@ def cmd_homing_full(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bo
                        + (cmd_vel[i] - state_vel[i]) * cmd_kd[i])
         )
         if abs(filtered_torque[i]) >= a["homing_torque_threshold"]:
-          zero_offsets[i] = state_pos[i] - a["homed_position"]
-          cmd_pos[i] = a["homed_position"]
-          cmd_vel[i] = 0.0
-          is_homed[i] = True
-          print(f"  Homed [{i:2d}] {a['name']}  pos={state_pos[i]:.4f}  zero={zero_offsets[i]:.4f}")
+          traveled = abs(state_pos[i] - start_pos[i])
+          if traveled < 0.10:
+            cmd_kp[i] = 0.0
+            cmd_kd[i] = 0.0
+            cmd_vel[i] = 0.0
+            is_homed[i] = True
+            skipped[i] = True
+            print(
+                f"  SKIP [{i:2d}] {a['name']}  fb не едет "
+                f"(Δ={traveled:.4f}) — ложный упор, отпускаем"
+            )
+          else:
+            zero_offsets[i] = state_pos[i] - a["homed_position"]
+            cmd_pos[i] = a["homed_position"]
+            cmd_vel[i] = 0.0
+            is_homed[i] = True
+            print(
+                f"  Homed [{i:2d}] {a['name']}  pos={state_pos[i]:.4f}  "
+                f"zero={zero_offsets[i]:.4f}"
+            )
         else:
           cmd_pos[i] += a["homing_velocity"] * dt_ms * 0.001
           cmd_vel[i] = a["homing_velocity"]
@@ -686,6 +713,11 @@ def cmd_homing_full(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bo
       return 1
     all_returned = True
     for i, a in enumerate(ACTUATORS):
+      if skipped[i] or (board0_only and a["can_ch"] not in (1, 2)):
+        cmd_kp[i] = 0.0
+        cmd_kd[i] = 0.0
+        cmd_vel[i] = 0.0
+        continue
       target = a["post_homing_position"]
       vel = abs(a["homing_velocity"])
       if cmd_pos[i] < target - 0.01:
@@ -719,6 +751,23 @@ def cmd_homing_full(bus: SpineBus, timeout_s: float, dt_ms: int, board0_only: bo
 
   elapsed = time.monotonic() - t0
   print(f"\nFinished homing! ({elapsed:.1f}s, {step} шагов)")
+  print("HOMING_RESULT  name             CAN id   start    end      d      status  hold")
+  for i, a in enumerate(ACTUATORS):
+    delta = state_pos[i] - start_pos[i]
+    active = not (board0_only and a["can_ch"] not in (1, 2))
+    if not active:
+      status = "ВЫКЛ"
+    elif abs(delta) >= 0.10:
+      status = "ЕХАЛ"
+    else:
+      status = "СТОИТ"
+    hold = "ДЕРЖИТ" if cmd_kp[i] > 0.0 else "ОТПУЩЕН"
+    print(
+        f"HOMING_RESULT  {a['name']:<16} {a['can_ch']}   {a['can_id']}  "
+        f"{start_pos[i]:+7.3f}  {state_pos[i]:+7.3f}  {delta:+7.3f}  {status:<6}  {hold}"
+    )
+  print("ЕХАЛ = энкодер сдвинулся ≥0.10 рад. ДЕРЖИТ = момент ещё включён.")
+  print("Скрипт сразу после таблицы снимает момент со всех.")
   for r in results:
     print_board(r)
   return 0
@@ -780,6 +829,83 @@ def cmd_hold_front_left(bus: SpineBus, seconds: float, kp: float, kd: float) -> 
     print("\nПрервано — отпускаем моторы.")
   bus.exchange(0, idle)
   print("\nГотово — моторы отпущены (flags=0).")
+  return 0
+
+
+def cmd_hold(bus: SpineBus, seconds: float, kp: float, kd: float, force_all: bool) -> int:
+  """Держит текущую позицию. С --all зажимает и моторы с нулевым энкодером."""
+  print("=== hold: фиксация текущей позиции, без хоуминга ===\n")
+  if force_all:
+    print("Режим --all: момент на все 12, даже если энкодер 0.")
+    print("Нулевой энкодер значит цель 0 рад: если он врёт, мотор поедет к этому нулю.")
+  else:
+    print("Мотор с энкодером около нуля не зажимается. Для всех 12 добавь --all.")
+  print("Ctrl+C снимает момент со всех моторов.\n")
+
+  zero_offsets = [0.0] * len(ACTUATORS)
+  for _ in range(20):
+    bus.exchange_both(SpineCommand.enable_only(), SpineCommand.enable_only())
+    time.sleep(0.01)
+  pos, _, probe = _read_actuator_states(bus, zero_offsets)
+  for r in probe:
+    print_board(r)
+  if not _board_ok(probe[0]):
+    print(f"\n{probe[0].device}: CE0 не отвечает — фиксацию не включаем.")
+    return 1
+
+  flags = [0, 0, 0, 0]
+  cmd_kp = [0.0] * len(ACTUATORS)
+  cmd_kd = [0.0] * len(ACTUATORS)
+  cmd_vel = [0.0] * len(ACTUATORS)
+  held = 0
+  print()
+  for i, actuator in enumerate(ACTUATORS):
+    silent = abs(pos[i]) < 1e-3
+    if silent and not force_all:
+      print(
+          f"  пропуск {actuator['name']}  CAN{actuator['can_ch']} "
+          f"id{actuator['can_id']}  fb={pos[i]:+.3f}"
+      )
+      continue
+    flags[actuator["can_ch"] - 1] = 1
+    cmd_kp[i] = kp
+    cmd_kd[i] = kd
+    held += 1
+    note = "  энкодер 0, цель 0" if silent else ""
+    print(
+        f"  держу   {actuator['name']}  CAN{actuator['can_ch']} "
+        f"id{actuator['can_id']}  fb={pos[i]:+.3f}{note}"
+    )
+  if held == 0:
+    print("\nНечего фиксировать: у всех энкодер около нуля.")
+    return 1
+  print(f"\nФиксация {held} моторов, kp={kp:.1f}, {seconds:.0f} с. В упор не едем.\n")
+
+  idle = SpineCommand()
+  idle.flags = [0, 0]
+
+  def release() -> None:
+    for _ in range(20):
+      bus.exchange_both(idle, idle)
+      time.sleep(0.01)
+    print("Момент снят (flags=0).")
+
+  t0 = time.monotonic()
+  step = 0
+  try:
+    while time.monotonic() - t0 < seconds:
+      c0 = _global_to_spine_cmd(0, flags, pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets)
+      c1 = _global_to_spine_cmd(2, flags, pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets)
+      bus.exchange_both(c0, c1)
+      if step % 100 == 0:
+        print(f"  t={time.monotonic() - t0:5.1f}s  держу {held}")
+      step += 1
+      time.sleep(0.01)
+  except KeyboardInterrupt:
+    print("\nCtrl+C — отпускаем моторы.")
+    release()
+    return 0
+  print("Время вышло. Последняя команда — фиксация, момент не снимал.")
   return 0
 
 
@@ -1484,6 +1610,131 @@ def cmd_motor_probe(
   return 1
 
 
+def cmd_motor_scan(bus: SpineBus, amplitude: float, kp: float, kd: float) -> int:
+  """По очереди все CAN id 1/2/3 на CAN1 и CAN2: ±amplitude, сводка по fb."""
+  if not (0.05 <= amplitude <= 0.8):
+    print("Ошибка: --amplitude в пределах 0.05…0.8 rad.")
+    return 2
+
+  slots = (
+      (1, "abad"),
+      (1, "hip"),
+      (1, "knee"),
+      (2, "abad"),
+      (2, "hip"),
+      (2, "knee"),
+  )
+  print("=== motor-scan: перебор 6 слотов CE0 (CAN1/CAN2 × id 1/2/3) ===\n")
+  print(f"Каждый: от текущей позиции +{amplitude:.2f} потом -{amplitude:.2f} и назад.")
+  print("Имена abad/hip/knee — слот в софте, не обязательно тот сустав на ноге.")
+  print("Ноги пусть висят. Ctrl+C — стоп и отпустить.\n")
+
+  n = len(ACTUATORS)
+  zero_offsets = [0.0] * n
+  idle = SpineCommand()
+  idle.flags = [0, 0]
+  rows: list[tuple[str, str, float, float, float, float, str]] = []
+  interrupted = False
+
+  def read_slot_fb(r: BoardResult, can_ch: int, motor: str) -> float:
+    raw_pos: dict[tuple[int, str], float] = {}
+    raw_vel: dict[tuple[int, str], float] = {}
+    _spine_to_global_leg(r.data, can_ch - 1, can_ch - 1, raw_pos, raw_vel)
+    return raw_pos[(can_ch - 1, motor)]
+
+  try:
+    for can_ch, motor in slots:
+      joint_id = ("abad", "hip", "knee").index(motor) + 1
+      actuator_i = next(
+          i for i, a in enumerate(ACTUATORS)
+          if a["can_ch"] == can_ch and a["can_id"] == joint_id
+      )
+      side = "левая" if can_ch == 1 else "правая"
+      flags = [0, 0, 0, 0]
+      flags[can_ch - 1] = 1
+      warm = SpineCommand()
+      warm.flags = [flags[0], flags[1]]
+      for _ in range(15):
+        bus.exchange(0, warm)
+        time.sleep(0.01)
+      pos, _, probe = _read_actuator_states(bus, zero_offsets)
+      if not _board_ok(probe[0]):
+        print(f"{probe[0].device}: CE0 пропал — scan оборван.")
+        return 1
+
+      fb0 = pos[actuator_i]
+      print(f"--- {side} CAN{can_ch} id={joint_id} ({motor})  fb0={fb0:+.4f} ---")
+      cmd_pos = list(pos)
+      cmd_vel = [0.0] * n
+      cmd_kp = [0.0] * n
+      cmd_kd = [0.0] * n
+      cmd_kp[actuator_i] = kp
+      cmd_kd[actuator_i] = kd
+
+      def run_phase(target: float, seconds: float) -> tuple[float, float]:
+        start = cmd_pos[actuator_i]
+        t0 = time.monotonic()
+        fb = fb0
+        lo = fb
+        hi = fb
+        while time.monotonic() - t0 < seconds:
+          x = min(1.0, (time.monotonic() - t0) / (seconds * 0.4))
+          blend = x * x * (3.0 - 2.0 * x)
+          cmd_pos[actuator_i] = start + (target - start) * blend
+          c0 = _global_to_spine_cmd(
+              0, flags, cmd_pos, cmd_vel, cmd_kp, cmd_kd, zero_offsets)
+          r = bus.exchange(0, c0)
+          if _board_ok(r):
+            fb = read_slot_fb(r, can_ch, motor)
+            lo = min(lo, fb)
+            hi = max(hi, fb)
+          time.sleep(0.01)
+        return fb - fb0, hi - lo
+
+      dev_plus, _ = run_phase(fb0 + amplitude, 1.8)
+      dev_minus, _ = run_phase(fb0 - amplitude, 1.8)
+      _, span = run_phase(fb0, 1.0)
+      span = max(span, abs(dev_plus), abs(dev_minus))
+      bus.exchange(0, idle)
+
+      no_fb = abs(fb0) < 1e-4 and span < 0.04
+      both = dev_plus > 0.5 * amplitude and dev_minus < -0.5 * amplitude
+      some = span >= 0.05
+      if no_fb:
+        verdict = "НЕТ (fb=0)"
+      elif both:
+        verdict = "ЕДЕТ"
+      elif some:
+        verdict = "слабо / одна сторона"
+      else:
+        verdict = "НЕТ"
+      print(
+          f"    +{amplitude:.2f}: {dev_plus:+.3f}   "
+          f"-{amplitude:.2f}: {dev_minus:+.3f}   span={span:.3f}  {verdict}\n"
+      )
+      rows.append(
+          (side, f"id{joint_id}/{motor}", fb0, dev_plus, dev_minus, span, verdict)
+      )
+  except KeyboardInterrupt:
+    interrupted = True
+    print("\nПрервано.")
+  finally:
+    for _ in range(5):
+      bus.exchange(0, idle)
+      time.sleep(0.01)
+
+  print("=== сводка ===")
+  print(f"{'нога':<8} {'слот':<14} {'fb0':>8} {'span':>8}  вердикт")
+  for side, slot, fb0, _p, _m, span, verdict in rows:
+    print(f"{side:<8} {slot:<14} {fb0:+8.3f} {span:8.3f}  {verdict}")
+  if not rows:
+    print("(ни одного слота не прогнали)")
+    return 1
+  moving = sum(1 for r in rows if r[6] == "ЕДЕТ")
+  print(f"\nЕдут {moving}/{len(rows)}. Имя слота — софт, смотри какой сустав качнулся.")
+  return 1 if interrupted else 0
+
+
 def cmd_selftest() -> int:
   print("=== selftest: кодирование пакета enable ===\n")
   cmd = SpineCommand.enable_only()
@@ -1530,13 +1781,19 @@ def build_parser() -> argparse.ArgumentParser:
   s = sub.add_parser("read", help="Прочитать положения")
   s.add_argument("--repeat", type=int, default=3)
 
-  s = sub.add_parser("homing", help="Тест homing-подобной команды на knee")
+  s = sub.add_parser(
+      "homing",
+      help="Отказ: это не homing робота (раньше срывало моторы к q=0)",
+  )
   s.add_argument("--seconds", type=float, default=3.0)
   s.add_argument("--kp", type=float, default=5.5)
   s.add_argument("--kd", type=float, default=0.2)
   s.add_argument("--velocity", type=float, default=0.3, help="qd_des_knee rad/s")
 
-  s = sub.add_parser("homing-full", help="Полный homing, ждёт до конца")
+  s = sub.add_parser(
+      "homing-full",
+      help="Homing как ROS do_homing, только передние ноги (CE0)",
+  )
   s.add_argument("--timeout", type=float, default=180.0, help="секунд")
   s.add_argument("--dt-ms", type=int, default=10, help="шаг цикла, мс")
 
@@ -1545,6 +1802,19 @@ def build_parser() -> argparse.ArgumentParser:
   s.add_argument("--seconds", type=float, default=15.0)
   s.add_argument("--kp", type=float, default=5.5)
   s.add_argument("--kd", type=float, default=0.5)
+
+  s = sub.add_parser(
+      "hold",
+      help="Зафиксировать текущую позицию всех моторов с живым энкодером, без хоуминга",
+  )
+  s.add_argument("--seconds", type=float, default=120.0)
+  s.add_argument("--kp", type=float, default=5.5)
+  s.add_argument("--kd", type=float, default=0.5)
+  s.add_argument(
+      "--all",
+      action="store_true",
+      help="Зажать все 12 моторов, включая нулевой энкодер (цель станет 0 рад)",
+  )
 
   s = sub.add_parser("wiggle-front-left", help="Качать колено передней левой туда-сюда")
   s.add_argument("--seconds", type=float, default=15.0)
@@ -1639,6 +1909,14 @@ def build_parser() -> argparse.ArgumentParser:
   s.add_argument("--kp", type=float, default=8.0)
   s.add_argument("--kd", type=float, default=0.3)
 
+  s = sub.add_parser(
+      "motor-scan",
+      help="Перебор всех 6 слотов CE0: ±амплитуда, кто едет по fb",
+  )
+  s.add_argument("--amplitude", type=float, default=0.5, help="рад туда-сюда от текущей позиции")
+  s.add_argument("--kp", type=float, default=5.5)
+  s.add_argument("--kd", type=float, default=0.5)
+
   return p
 
 
@@ -1654,6 +1932,7 @@ def main() -> int:
       "motor-position",
       "motor-console",
       "motor-probe",
+      "motor-scan",
       "homing-full",
   )
   bus = SpineBus(speed_hz=args.speed, board0_only=board0_only)
@@ -1675,6 +1954,8 @@ def main() -> int:
       return cmd_homing_full(bus, args.timeout, args.dt_ms, board0_only=True)
     if args.command == "hold-front-left":
       return cmd_hold_front_left(bus, args.seconds, args.kp, args.kd)
+    if args.command == "hold":
+      return cmd_hold(bus, args.seconds, args.kp, args.kd, args.all)
     if args.command == "wiggle-front-left":
       return cmd_wiggle_front_left(
           bus, args.seconds, args.amplitude, args.hz, args.kp, args.kd)
@@ -1701,6 +1982,8 @@ def main() -> int:
       return cmd_motor_probe(
           bus, args.can_ch, args.motor, args.amplitude, args.kp, args.kd,
       )
+    if args.command == "motor-scan":
+      return cmd_motor_scan(bus, args.amplitude, args.kp, args.kd)
     return 2
   finally:
     bus.close()

@@ -12,6 +12,7 @@ find_package(hardware_interface REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # add compile directive for shared library
 add_library(control_board_hardware_interface SHARED
@@ -35,6 +36,8 @@ ament_target_dependencies(
   rclcpp_lifecycle
   tf2
 )
+
+target_link_libraries(control_board_hardware_interface yaml-cpp)
 
 pluginlib_export_plugin_description_file(hardware_interface control_board_hardware_interface.xml)
 

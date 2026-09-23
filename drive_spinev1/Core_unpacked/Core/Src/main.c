@@ -142,7 +142,8 @@ int softstop_joint(joint_state state, joint_control *control, float limit_p, flo
     return 0;
 }
 
-void control()
+/* 1 — Enter/Exit уже ушли в CAN, spi_isr не должен следом PackAll. */
+static int control(void)
 {
     if (((spi_command.flags[0] & 0x1) == 1) && (enabled == 0))
     {
@@ -155,11 +156,14 @@ void control()
         EnterMotorMode(&h2_can);
         WriteAll();
 //        printf("e\n\r");
-        return;
+        return 1;
     }
     else if ((((spi_command.flags[0] & 0x1)) == 0) && (enabled == 1))
     {
         enabled = 0;
+        /* Иначе spi_isr сделает PackAll от прошлого PD и hip снова зажмётся. */
+        memset(&l1_control, 0, sizeof(l1_control));
+        memset(&l2_control, 0, sizeof(l2_control));
         ExitMotorMode(&a1_can);
         ExitMotorMode(&a2_can);
         ExitMotorMode(&h1_can);
@@ -168,7 +172,7 @@ void control()
         ExitMotorMode(&k2_can);
         WriteAll();
 //        printf("x\n\r");
-        return;
+        return 1;
     }
 
     spi_data.q_abad[0] = l1_state.a.p;
@@ -246,6 +250,7 @@ void control()
     {
         tx_buff[i] = ((uint16_t *)(&spi_data))[i];
     }
+    return 0;
 }
 
 /* После оборванного CE/короткого кадра HAL_SPI_TransmitReceive с
@@ -292,9 +297,12 @@ void spi_isr(void)
     return;
   }
 
-  control();
-  PackAll();
-  WriteAll();
+  /* Enter/Exit уже отправили свой кадр. PackAll здесь затирал Exit прошлым PD. */
+  if (control() == 0)
+  {
+    PackAll();
+    WriteAll();
+  }
 }
 /* USER CODE END 0 */
 
