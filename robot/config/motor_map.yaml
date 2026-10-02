@@ -1,17 +1,24 @@
 # Какой мотор крутит сустав модели.
 # can_id — id из Motor Wizard (1, 2 или 3 на своей шине).
-# Имя сустава остаётся осью модели: _1 abad, _2 hip, _3 knee.
+# Имя сустава остаётся осью модели (по URDF): _1 бедро (вперёд-назад), _2 отведение (вбок), _3 колено.
 # Знак хоуминга и лимиты остаются у сустава, здесь только адрес мотора.
 #
-# Сейчас карта как в URDF. По зажатию после хоуминга 2026-09-22 подозрение,
-# его в файл не вписано — следующий старт robot.service сразу хоумит:
-#   передняя левая: abad и hip местами (id 1 ↔ 2)
+# После правки: sudo systemctl restart robot.service
+# (для пульта моторов — перезапусти и tools/motor_web.py).
+
+# Перестановки целых ног (меняются каналы CAN между суставами).
+# true = поменять местами. Можно включать оба сразу.
+swap_front_back: false  # перед ↔ зад (front_* ↔ back_*)
+swap_left_right: false   # лево ↔ право (*_l_* ↔ *_r_*)
+
+# Сейчас карта как в URDF. По зажатию после хоуминга 2026-09-22 подозрение
+# (внутри ноги, не целыми ногами) — раскомментируй и поправь id вручную:
+#   передняя левая: _1 и _2 местами (id 1 ↔ 2)
 #     leg_front_l_1 can_id: 2
 #     leg_front_l_2 can_id: 1
-#   задняя правая: abad и колено местами (id 1 ↔ 3)
+#   задняя правая: _1 и колено местами (id 1 ↔ 3)
 #     leg_back_r_1 can_id: 3
 #     leg_back_r_3 can_id: 1
-# Передняя правая совпала с моделью. Задняя левая на шине не ответила.
 
 joints:
   leg_front_r_1: {can_channel: 2, can_id: 1}
@@ -20,7 +27,7 @@ joints:
   leg_front_l_1: {can_channel: 1, can_id: 1}
   leg_front_l_2: {can_channel: 1, can_id: 2}
   leg_front_l_3: {can_channel: 1, can_id: 3}
-  leg_back_r_1: {can_channel: 4, can_id: 1}
+  leg_back_r_1: {can_channel: 4, can_id: 1} 
   leg_back_r_2: {can_channel: 4, can_id: 2}
   leg_back_r_3: {can_channel: 4, can_id: 3}
   leg_back_l_1: {can_channel: 3, can_id: 1}

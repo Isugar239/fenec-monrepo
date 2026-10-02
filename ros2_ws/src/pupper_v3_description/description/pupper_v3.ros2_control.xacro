@@ -6,6 +6,8 @@
             <hardware>
                 <plugin>control_board_hardware_interface/ControlBoardHardwareInterface</plugin>
                 <param name="use_imu">true</param>
+                <!-- Smooth short gyro spikes without filtering the orientation quaternion. -->
+                <param name="imu_gyro_filter_alpha">0.2</param>
                 <param name="partial_motors">${partial_motors}</param>
                 <param name="torque_enable">${torque_enable}</param>
                 <param name="motor_map_file">/home/pi/pupperv3-monorepo/robot/config/motor_map.yaml</param>

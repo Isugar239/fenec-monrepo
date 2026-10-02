@@ -11,17 +11,17 @@
 
             <param name="homing_stage">5</param>
             <param name="homing_velocity">-1.5</param>
-            <param name="homed_position">-1.22</param>
-            <param name="post_homing_position">0.0</param>
+            <param name="homed_position">-0.312</param>
+            <param name="post_homing_position">0.000</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-1.12</param>
-            <param name="position_max">2.41</param>
+            <param name="position_min">-0.213</param>
+            <param name="position_max">3.317</param>
             <param name="velocity_max">30.0</param>
             <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -50,7 +50,7 @@
             <param name="position_max">3.04</param>
             <param name="velocity_max">30.0</param>
             <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -69,17 +69,17 @@
 
             <param name="homing_stage">3</param>
             <param name="homing_velocity">1.5</param>
-            <param name="homed_position">0.71</param>
-            <param name="post_homing_position">0.71</param>
+            <param name="homed_position">0.605</param>
+            <param name="post_homing_position">0.605</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-2.69</param>
-            <param name="position_max">0.61</param>
+            <param name="position_min">-2.795</param>
+            <param name="position_max">0.505</param>
             <param name="velocity_max">30.0</param>
             <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -98,17 +98,17 @@
 
             <param name="homing_stage">5</param>
             <param name="homing_velocity">1.5</param>
-            <param name="homed_position">1.22</param>
-            <param name="post_homing_position">0.0</param>
+            <param name="homed_position">0.627</param>
+            <param name="post_homing_position">0.000</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-2.41</param>
-            <param name="position_max">1.12</param>
+            <param name="position_min">-3.003</param>
+            <param name="position_max">0.527</param>
             <param name="velocity_max">30.0</param>
             <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -132,12 +132,16 @@
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
+            <!-- Удержание после хоуминга. Та же рука сдвигает это отведение на 8.8° против 1.3° у заднего левого. -->
+            <param name="hold_kp">16.0</param>
+            <param name="hold_kd">0.5</param>
 
             <param name="position_min">-3.04</param>
             <param name="position_max">0.32</param>
             <param name="velocity_max">30.0</param>
             <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <!-- Слабее заднего левого отведения: kp_max поднят, стойка шлёт удвоенный kp. -->
+            <param name="kp_max">40.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -156,17 +160,17 @@
 
             <param name="homing_stage">3</param>
             <param name="homing_velocity">-1.5</param>
-            <param name="homed_position">-0.71</param>
-            <param name="post_homing_position">-0.71</param>
+            <param name="homed_position">-0.570</param>
+            <param name="post_homing_position">-0.570</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-0.61</param>
-            <param name="position_max">2.69</param>
+            <param name="position_min">-0.470</param>
+            <param name="position_max">2.830</param>
             <param name="velocity_max">30.0</param>
             <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -185,17 +189,17 @@
 
             <param name="homing_stage">2</param>
             <param name="homing_velocity">-1.5</param>
-            <param name="homed_position">-1.22</param>
-            <param name="post_homing_position">0.0</param>
+            <param name="homed_position">-1.673</param>
+            <param name="post_homing_position">0.000</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-1.12</param>
-            <param name="position_max">2.41</param>
+            <param name="position_min">-1.573</param>
+            <param name="position_max">1.957</param>
             <param name="velocity_max">30.0</param>
-            <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="effort_max">6.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -214,17 +218,17 @@
 
             <param name="homing_stage">1</param>
             <param name="homing_velocity">-1.5</param>
-            <param name="homed_position">-0.42</param>
-            <param name="post_homing_position">0.0</param>
+            <param name="homed_position">-0.420</param>
+            <param name="post_homing_position">0.000</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-0.32</param>
-            <param name="position_max">3.04</param>
+            <param name="position_min">-0.320</param>
+            <param name="position_max">3.040</param>
             <param name="velocity_max">30.0</param>
-            <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="effort_max">6.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -243,17 +247,17 @@
 
             <param name="homing_stage">0</param>
             <param name="homing_velocity">1.5</param>
-            <param name="homed_position">0.71</param>
-            <param name="post_homing_position">0.71</param>
+            <param name="homed_position">0.780</param>
+            <param name="post_homing_position">0.780</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-2.69</param>
-            <param name="position_max">0.61</param>
+            <param name="position_min">-2.620</param>
+            <param name="position_max">0.680</param>
             <param name="velocity_max">30.0</param>
-            <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="effort_max">6.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -272,17 +276,17 @@
 
             <param name="homing_stage">2</param>
             <param name="homing_velocity">1.5</param>
-            <param name="homed_position">1.22</param>
-            <param name="post_homing_position">0.0</param>
+            <param name="homed_position">1.778</param>
+            <param name="post_homing_position">0.000</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-2.41</param>
-            <param name="position_max">1.12</param>
+            <param name="position_min">-1.852</param>
+            <param name="position_max">1.678</param>
             <param name="velocity_max">30.0</param>
-            <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="effort_max">6.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -310,8 +314,8 @@
             <param name="position_min">-3.04</param>
             <param name="position_max">0.32</param>
             <param name="velocity_max">30.0</param>
-            <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="effort_max">6.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -330,17 +334,19 @@
 
             <param name="homing_stage">0</param>
             <param name="homing_velocity">-1.5</param>
-            <param name="homed_position">-0.71</param>
-            <param name="post_homing_position">-0.71</param>
+            <!-- Как у трёх других коленей: стойка (+0.52) лежит в 1.23 рад от упора хоуминга.
+                 Ноль +0.535 ставил стойку прямо в упор, нога оставалась сложенной. -->
+            <param name="homed_position">-0.815</param>
+            <param name="post_homing_position">-0.815</param>
             <param name="homing_kp">5.5</param>
             <param name="homing_kd">0.2</param>
             <param name="homing_torque_threshold">2.0</param>
 
-            <param name="position_min">-0.61</param>
-            <param name="position_max">2.69</param>
+            <param name="position_min">-0.715</param>
+            <param name="position_max">1.895</param>
             <param name="velocity_max">30.0</param>
-            <param name="effort_max">3.0</param>
-            <param name="kp_max">10.0</param>
+            <param name="effort_max">6.0</param>
+            <param name="kp_max">20.0</param>
             <param name="kd_max">1.0</param>
 
             <command_interface name="position"/>
@@ -355,9 +361,13 @@
 
 
         <sensor name="imu_sensor">
-            <param name="yaw">0</param>
-            <param name="pitch">-1.57079632679</param>
-            <param name="roll">0</param>
+            <!-- Rz(yaw)·Ry(pitch)·Rx(roll). 2026-09-25: без yaw наклон носом вниз шёл в крен;
+                 с yaw=+90° завал на заднюю левую читался как нос и правый бок вниз — знак x и y был обратный.
+                 2026-09-28: лево/право были инвертированы. yaw +180° при том же roll разворачивает
+                 датчик вокруг вертикали: бока меняются местами, тангаж и верх не трогаются. -->
+            <param name="yaw">1.57079632679</param>
+            <param name="pitch">0</param>
+            <param name="roll">-1.57079632679</param>
 
             <state_interface name="orientation.x"/>
             <state_interface name="orientation.y"/>

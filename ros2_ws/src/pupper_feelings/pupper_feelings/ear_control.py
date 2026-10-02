@@ -15,7 +15,8 @@ class DualShockServoController(Node):
         super().__init__("dualshock_servo_controller")
         self.subscription = self.create_subscription(Joy, "/joy", self.joy_callback, 10)
 
-        # GPIO pins for the servos controlling the ears
+        # Старые пины. Сигнал ушей теперь GPIO 12 и 13, их держит пульт аппаратным ШИМ.
+        # Эти 16/26 не переносить на 12/13: gpiozero даёт программный импульс и греет сервы.
         self.servo_l_pin = 16
         self.servo_r_pin = 26
 

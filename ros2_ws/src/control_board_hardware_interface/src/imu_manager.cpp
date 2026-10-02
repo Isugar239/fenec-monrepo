@@ -1,5 +1,7 @@
 #include "control_board_hardware_interface/imu_manager.hpp"
 
+#include <chrono>
+
 // set rotation matrix based on roll, pitch, yaw
 void IMUManager::set_imu_offset(double roll, double pitch, double yaw) {
   offset_quaternion.setRPY(roll, pitch, yaw);
@@ -12,30 +14,15 @@ bool IMUManager::contains_nan(const Eigen::Quaternionf &q) {
 
 std::optional<std::pair<BNO055::Output, uint32_t>> IMUManager::sample_imu_multiple_attempts(
     int max_samples, int delay_ms) {
-  /*
-   * Sample the IMU up to max_samples times until a good sample is received.
-   * A good sample is defined as a quaternion that is not near zero and not NaN.
-   */
-
   // Record start time
   auto start = std::chrono::high_resolution_clock::now();
 
-  for (int i = 0; i < max_samples; i++) {
-    BNO055::Output output = imu_->sample();
-    if (contains_nan(output.quat) || output.quat.isApprox(Eigen::Quaternionf(0, 0, 0, 0), 1e-6)) {
-      RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
-                  "%sBad IMU sample [%f, %f, %f, %f]. Retrying...%s", YELLOW_ANSI, output.quat.x(),
-                  output.quat.y(), output.quat.z(), output.quat.w(), RESET_ANSI);
-    } else {
-      auto end = std::chrono::high_resolution_clock::now();
-      auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-      return std::make_pair(output, duration.count());
-    }
-    if (delay_ms > 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    }
-  }
-  return std::nullopt;
+  (void)max_samples;
+  (void)delay_ms;
+  BNO055::Output output = imu_->sample();
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  return std::make_pair(output, duration.count());
 }
 
 void IMUManager::poll_imu() {
@@ -53,14 +40,34 @@ BNO055::Output IMUManager::get_imu_data() {
     return imu_data;
 }
 
+void IMUManager::reopen() {
+  RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+              "IMU не обновляет положение 1 с, открываю I2C заново");
+  imu_.reset();
+  imu_ = std::make_unique<BNO055>(IMU_I2C_DEVICE_NUMBER, micros_between_reports_);
+}
+
 void IMUManager::imu_read_thread_fn() {
+  auto last_packet_at = std::chrono::steady_clock::now();
+  auto last_stamp = std::chrono::high_resolution_clock::time_point{};
   while (!stop_imu_read_thread_) {
     poll_imu();
+    const auto stamp = get_imu_data().packet_timestamp;
+    const auto now = std::chrono::steady_clock::now();
+    if (stamp != last_stamp) {
+      last_stamp = stamp;
+      last_packet_at = now;
+    } else if (now - last_packet_at >= std::chrono::seconds(1)) {
+      reopen();
+      last_packet_at = std::chrono::steady_clock::now();
+      last_stamp = {};
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }
 
 void IMUManager::begin(uint32_t micros_between_reports) {
+  micros_between_reports_ = micros_between_reports;
   imu_ = std::make_unique<BNO055>(IMU_I2C_DEVICE_NUMBER, micros_between_reports);
 
   stop_imu_read_thread_ = false;

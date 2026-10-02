@@ -139,6 +139,22 @@ neural_controller:
       description: "Maximum body angle (rad) allowed before the controller is reset",
     }
 
+  roll_offset_deg:
+    {
+      type: double,
+      default_value: 0.0,
+      description: "Roll added to the IMU orientation before projected gravity is written into the policy observation, in degrees. Positive means the network sees the left side higher and will lower it. Does not change the gyro.",
+      validation: { bounds<>: [-45.0, 45.0] },
+    }
+
+  pitch_offset_deg:
+    {
+      type: double,
+      default_value: 0.0,
+      description: "Pitch added to the IMU orientation before projected gravity is written into the policy observation, in degrees. Positive means the network sees the nose higher and will lower it. Same sign as the training pitch command. Does not change the gyro.",
+      validation: { bounds<>: [-45.0, 45.0] },
+    }
+
   estop_kd:
     {
       type: double,

@@ -1,0 +1,19 @@
+[Unit]
+Description=Pupper screen (http://<ip>:8090)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/pupperv3-monorepo/tools/pupper_screen
+ExecStart=/bin/bash /home/pi/pupperv3-monorepo/tools/pupper_screen/run.sh
+KillSignal=SIGINT
+TimeoutStopSec=10
+Restart=always
+RestartSec=3
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+[Install]
+WantedBy=multi-user.target

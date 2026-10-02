@@ -111,13 +111,43 @@ ACTUATORS = (
 MOTOR_MAP_PATH = "/home/pi/pupperv3-monorepo/robot/config/motor_map.yaml"
 
 
+def _swap_leg_assignments(
+    joints: dict[str, dict], swap_front_back: bool, swap_left_right: bool
+) -> dict[str, dict]:
+    """Меняет местами CAN-адреса целых ног. Хоуминг/знаки остаются у имени сустава."""
+    out = {name: dict(spec) for name, spec in joints.items()}
+
+    def exchange(a: str, b: str) -> None:
+        out[a], out[b] = out[b], out[a]
+
+    if swap_front_back:
+        for side in ("l", "r"):
+            for joint in ("1", "2", "3"):
+                exchange(f"leg_front_{side}_{joint}", f"leg_back_{side}_{joint}")
+    if swap_left_right:
+        for fb in ("front", "back"):
+            for joint in ("1", "2", "3"):
+                exchange(f"leg_{fb}_l_{joint}", f"leg_{fb}_r_{joint}")
+    return out
+
+
 def apply_motor_map(path: str = MOTOR_MAP_PATH) -> None:
     """Подменяет can_ch/can_id из robot/config/motor_map.yaml. Хоуминг остаётся у сустава."""
     with open(path, encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
-    joints = data.get("joints") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        raise SystemExit(f"{path}: корень должен быть словарём")
+    joints = data.get("joints")
     if not isinstance(joints, dict):
         raise SystemExit(f"{path}: нет словаря joints")
+    swap_fb = bool(data.get("swap_front_back", False))
+    swap_lr = bool(data.get("swap_left_right", False))
+    joints = _swap_leg_assignments(joints, swap_fb, swap_lr)
+    if swap_fb or swap_lr:
+        print(
+            f"motor_map: swap_front_back={swap_fb} swap_left_right={swap_lr}",
+            flush=True,
+        )
     by_name = {actuator["name"]: actuator for actuator in ACTUATORS}
     if set(joints) != set(by_name):
         missing = sorted(set(by_name) - set(joints))

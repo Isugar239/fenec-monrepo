@@ -45,6 +45,7 @@ controller_interface::CallbackReturn NeuralController::on_init() {
   try {
     param_listener_ = std::make_shared<ParamListener>(get_node());
     params_ = param_listener_->get_params();
+    dynamic_params_ = params_;
 
     if (params_.gain_multiplier < 0.0) {
       RCLCPP_ERROR(get_node()->get_logger(), "Gain_multiplier must be >= 0.0. Stopping");
@@ -210,6 +211,11 @@ controller_interface::CallbackReturn NeuralController::on_activate(
   // Initialize the observation vector
   observation_.resize(params_.observation_history * kSingleObservationSize, 0.0);
 
+  RCLCPP_INFO(get_node()->get_logger(),
+              "Policy orientation offset: roll %.2f deg, pitch %.2f deg. Positive pitch makes "
+              "the network see the nose higher, so it lowers the nose.",
+              params_.roll_offset_deg, params_.pitch_offset_deg);
+
   // Set the gravity z-component in the initial observation vector
   for (int i = 0; i < params_.observation_history; i++) {
     observation_.at(i * kSingleObservationSize + kGravityZIndx) = -1.0;
@@ -318,6 +324,31 @@ controller_interface::CallbackReturn NeuralController::on_deactivate(
 
 controller_interface::return_type NeuralController::update(const rclcpp::Time &time,
                                                            const rclcpp::Duration &period) {
+  if (param_listener_->try_get_params(dynamic_params_)) {
+    if (dynamic_params_.roll_offset_deg != params_.roll_offset_deg ||
+        dynamic_params_.pitch_offset_deg != params_.pitch_offset_deg) {
+      params_.roll_offset_deg = dynamic_params_.roll_offset_deg;
+      params_.pitch_offset_deg = dynamic_params_.pitch_offset_deg;
+      RCLCPP_INFO(get_node()->get_logger(),
+                  "Policy orientation offset: roll %.2f deg, pitch %.2f deg. Positive pitch makes "
+                  "the network see the nose higher, so it lowers the nose.",
+                  params_.roll_offset_deg, params_.pitch_offset_deg);
+    }
+    if (dynamic_params_.gain_multiplier != params_.gain_multiplier) {
+      if (dynamic_params_.gain_multiplier < 0.0) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "Rejected gain_multiplier %.3f. Keeping %.3f.",
+                     dynamic_params_.gain_multiplier, params_.gain_multiplier);
+      } else {
+        params_.gain_multiplier = dynamic_params_.gain_multiplier;
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "gain_multiplier %.3f -> kp %.2f, kd %.2f", params_.gain_multiplier,
+                    params_.kps.at(0) * params_.gain_multiplier,
+                    params_.kds.at(0) * params_.gain_multiplier);
+      }
+    }
+  }
+
   // When started, return to the default joint positions
   double time_since_init = (time - init_time_).seconds();
   if (time_since_init < params_.init_duration) {
@@ -448,8 +479,17 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       }
     }
 
-    // Calculate the projected gravity vector
-    tf2::Quaternion q(orientation_x, orientation_y, orientation_z, orientation_w);
+    // Projected gravity is the only orientation the policy sees (observation
+    // indices 3..5). Roll and pitch offsets rotate that attitude in the body
+    // frame. tf2 pitch is nose-down; the policy pitch command is nose-up, so
+    // the pitch offset is negated here.
+    constexpr double kDegToRad = 0.017453292519943295;
+    tf2::Quaternion q_imu(orientation_x, orientation_y, orientation_z, orientation_w);
+    tf2::Quaternion q_offset;
+    q_offset.setRPY(params_.roll_offset_deg * kDegToRad, -params_.pitch_offset_deg * kDegToRad,
+                    0.0);
+    tf2::Quaternion q = q_imu * q_offset;
+    q.normalize();
     tf2::Matrix3x3 m(q);
     tf2::Vector3 world_gravity_vector(0, 0, -1);
     tf2::Vector3 projected_gravity_vector = m.inverse() * world_gravity_vector;

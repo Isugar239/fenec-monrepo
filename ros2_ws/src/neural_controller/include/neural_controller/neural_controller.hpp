@@ -80,6 +80,9 @@ class NeuralController : public controller_interface::ControllerInterface {
 
   std::shared_ptr<ParamListener> param_listener_;
   Params params_;
+  // Listener snapshot. Offset changes are copied out of it so a parameter
+  // update does not wipe gains loaded from the policy JSON.
+  Params dynamic_params_;
 
   // Observation vector. Size is determined at runtime by the observation history parameter
   std::vector<float> observation_ = {};

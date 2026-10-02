@@ -27,6 +27,10 @@ BNO055::BNO055(int i2c_device_number, uint32_t micros_between_reports) {
       m_okay = false;
       printf("[BNO055] failed to set slave: %s\n", strerror(errno));
     }
+    // 10 units of 10 ms. A hung transfer returns instead of blocking the read thread.
+    if (ioctl(m_fd, I2C_TIMEOUT, 10) < 0) {
+      printf("[BNO055] failed to set timeout: %s\n", strerror(errno));
+    }
   }
   printf("Connected\r\n");
   softReset();

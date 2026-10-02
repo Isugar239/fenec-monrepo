@@ -1,0 +1,14 @@
+[Unit]
+Description=Pupper dashboard (http://<ip>:8091)
+After=robot.service network-online.target
+
+[Service]
+User=pi
+ExecStart=/bin/bash /home/pi/pupperv3-monorepo/tools/pupper_dashboard/run.sh
+KillSignal=SIGINT
+TimeoutStopSec=5
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

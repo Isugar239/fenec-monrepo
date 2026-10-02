@@ -12,6 +12,7 @@
   <depend>pluginlib</depend>
   <depend>hardware_interface</depend>
   <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>tf2</depend>
   <depend>yaml-cpp</depend>

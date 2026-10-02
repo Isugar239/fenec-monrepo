@@ -1,7 +1,23 @@
 {
-    "rust-analyzer.linkedProjects": [
-        "pupper-rs/Cargo.toml"
-    ],
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": []
+  "rust-analyzer.linkedProjects": [
+    "pupper-rs/Cargo.toml"
+  ],
+  "python-envs.defaultEnvManager": "ms-python.python:system",
+  "python-envs.pythonProjects": [],
+  "git.decorations.enabled": true,
+  "git.untrackedChanges": "mixed",
+  "git.autofetch": true,
+  "scm.diffDecorations": "all",
+  "scm.diffDecorationsGutterVisibility": "always",
+  "scm.defaultViewMode": "tree",
+  "diffEditor.renderSideBySide": true,
+  "explorer.decorations.badges": true,
+  "explorer.decorations.colors": true,
+  "files.watcherExclude": {
+    "**/ros2_ws/build/**": true,
+    "**/ros2_ws/install/**": true,
+    "**/ros2_ws/log/**": true,
+    "**/pupper-rs/target/**": true,
+    "**/bags/**": true
+  }
 }

@@ -1,5 +1,6 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.actions import DeclareLaunchArgument, GroupAction, LogInfo, RegisterEventHandler
+from launch.event_handlers import OnProcessIO
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -319,9 +320,7 @@ def generate_launch_description():
     #
     # 7. Put them all together
     #
-    nodes = [
-        robot_state_publisher,
-        control_node,
+    spawners = [
         robot_controller_spawner,
         three_legged_robot_controller_spawner,
         # Forward command controllers for animation
@@ -329,8 +328,37 @@ def generate_launch_description():
         forward_kp_controller_spawner,
         forward_kd_controller_spawner,
         joint_state_broadcaster_spawner,
-        # Comment/uncomment as needed:
         imu_sensor_broadcaster_spawner,
+    ]
+
+    # Хоуминг блокирует controller_manager на десятки секунд, а load_controller в спавнере
+    # Jazzy ждёт ответа жёстко 10 с (--service-call-timeout туда не передаётся): спавнер
+    # повторяет load, получает «already loaded» и падает, контроллер остаётся unconfigured.
+    # Поэтому на железе спавнеры стартуют только после конца хоуминга.
+    homing_done = []
+
+    def spawn_after_homing(event):
+        text = event.text.decode(errors="replace")
+        if homing_done or not ("Finished homing!" in text or "skipping homing" in text):
+            return None
+        homing_done.append(True)
+        return spawners
+
+    spawners_after_homing = RegisterEventHandler(
+        OnProcessIO(
+            target_action=control_node,
+            on_stdout=spawn_after_homing,
+            on_stderr=spawn_after_homing,
+        ),
+        condition=UnlessCondition(LaunchConfiguration("sim")),
+    )
+    spawners_now = GroupAction(spawners, condition=IfCondition(LaunchConfiguration("sim")))
+
+    nodes = [
+        robot_state_publisher,
+        control_node,
+        spawners_after_homing,
+        spawners_now,
         foxglove_bridge,
         joy_util_node,
         # joy_node,

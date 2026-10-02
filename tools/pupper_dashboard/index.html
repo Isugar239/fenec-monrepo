@@ -1,0 +1,1378 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pupper — пульт</title>
+<style>
+  :root {
+    --bg: #090d13; --bg2: #0d121a; --panel: #121822; --panel2: #0f141c; --raised: #1a2230;
+    --line: #243044; --line2: #1b2434;
+    --text: #edf1f7; --dim: #8f9db2; --faint: #5e6b80;
+    --ok: #5fd08a; --warn: #f0b94a; --bad: #ff6b6b; --accent: #6cb2ff; --accent2: #a98bff;
+    --fr: #ff7a59; --fl: #ffd166; --br: #4cc9f0; --bl: #b388ff;
+    --radius: 16px; --radius-sm: 10px;
+    --shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--text); font: 14px/1.5 Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+    background:
+      radial-gradient(1100px 420px at 5% -8%, rgba(108, 178, 255, 0.14), transparent 60%),
+      radial-gradient(900px 380px at 100% -4%, rgba(169, 139, 255, 0.12), transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(108, 178, 255, 0.35); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #263247; border-radius: 99px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---------- шапка ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20; padding: 10px 20px 10px;
+    background: rgba(10, 14, 20, 0.82); backdrop-filter: blur(16px) saturate(140%);
+    border-bottom: 1px solid var(--line);
+  }
+  .hwrap { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+  .topbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .brand { display: flex; align-items: center; gap: 12px; margin-right: 8px; }
+  .mark {
+    width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+    color: #fff; font-weight: 800; font-size: 18px; letter-spacing: -0.04em;
+    background: linear-gradient(140deg, #8ec5ff 0%, #4a86d6 45%, #7c5cd6 100%);
+    box-shadow: 0 6px 18px rgba(92, 140, 220, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  }
+  header h1 { font-size: 19px; margin: 0; letter-spacing: 0.01em; line-height: 1.1; }
+  .brand-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .statuses { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .estops { display: flex; gap: 8px; margin-left: auto; }
+  .navrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .navrow .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
+  @media (max-width: 900px) {
+    header { padding: 8px 12px; }
+    .navrow { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+    .navrow > * { flex: none; }
+    .statuses > * { flex: none; }
+    .statuses { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; order: 3; flex-basis: 100%; }
+    .brand-sub { display: none; }
+    main { padding: 14px 12px 48px; }
+    section.card { padding: 14px 14px; scroll-margin-top: 110px; }
+  }
+  @media (max-height: 560px) { header { position: static; } .demo-view { position: static; } }
+  .chip {
+    display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12.5px; color: var(--dim);
+    text-decoration: none; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.02);
+    transition: all 0.15s;
+  }
+  .chip:hover { color: var(--text); border-color: #3a4c68; background: rgba(108, 178, 255, 0.1); }
+  .chip.hot { color: #cfe4ff; border-color: #35557f; background: rgba(108, 178, 255, 0.12); }
+
+  /* ---------- элементы ---------- */
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
+    background: #1a212d; color: var(--dim); white-space: nowrap; border: 1px solid #263044; font-size: 12.5px;
+  }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.55; }
+  .pill.ok { background: rgba(95, 208, 138, 0.1); color: var(--ok); border-color: rgba(95, 208, 138, 0.32); }
+  .pill.ok::before { opacity: 1; box-shadow: 0 0 8px currentColor; }
+  .pill.warn { background: rgba(240, 185, 74, 0.1); color: var(--warn); border-color: rgba(240, 185, 74, 0.32); }
+  .pill.warn::before { opacity: 1; }
+  .pill.bad { background: rgba(255, 107, 107, 0.1); color: var(--bad); border-color: rgba(255, 107, 107, 0.34); }
+  .pill.bad::before { opacity: 1; box-shadow: 0 0 8px currentColor; }
+
+  button {
+    background: var(--raised); color: var(--text); border: 1px solid #2f3b50; border-radius: var(--radius-sm);
+    padding: 8px 14px; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.05s, box-shadow 0.15s;
+  }
+  button:hover { background: #232d40; border-color: #43536f; }
+  button:active { transform: translateY(1px); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary {
+    background: linear-gradient(180deg, #3b86d8, #2a63ab); border-color: #4f98e6; color: #fff;
+    box-shadow: 0 4px 14px rgba(59, 134, 216, 0.28);
+  }
+  button.primary:hover { background: linear-gradient(180deg, #4a95e6, #326fbb); }
+  button.stop { background: #6d2020; border-color: #a53b3b; font-weight: 700; }
+  button.stop:hover { background: #832626; }
+  button.estop {
+    background: linear-gradient(180deg, #d02222, #a31212); border-color: #f04848; font-weight: 800;
+    box-shadow: 0 4px 16px rgba(220, 40, 40, 0.35);
+  }
+  button.estop:hover { background: linear-gradient(180deg, #e32b2b, #b51616); }
+  button.held { background: var(--accent); color: #061018; border-color: var(--accent); }
+  button:disabled { opacity: 0.38; cursor: not-allowed; box-shadow: none; }
+  button.sm { padding: 4px 9px; font-size: 12.5px; }
+
+  input[type=number], input[type=text], select {
+    background: var(--panel2); color: var(--text); border: 1px solid #2c384d; border-radius: 8px;
+    padding: 7px 9px; font: inherit; font-size: 13.5px;
+  }
+  input[type=number] { width: 84px; }
+  input[type=text] { min-width: 0; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; height: 6px; border-radius: 99px; background: #222c3d;
+    accent-color: var(--accent); min-width: 0;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; cursor: pointer;
+    background: linear-gradient(145deg, #a7d1ff, #5a9be6); border: 2px solid #0d1219;
+    box-shadow: 0 0 0 1px #4d79b3, 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; cursor: pointer;
+    background: linear-gradient(145deg, #a7d1ff, #5a9be6); border: 2px solid #0d1219;
+  }
+  input[type=range]::-moz-range-track { height: 6px; border-radius: 99px; background: #222c3d; }
+  input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 1px #6aa4ee, 0 0 0 5px rgba(108, 178, 255, 0.18); }
+
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  .hint { color: var(--dim); font-size: 12.5px; margin-top: 8px; line-height: 1.55; }
+  .hint b { color: #c5d0e0; font-weight: 600; }
+  .msg { margin-top: 8px; padding: 8px 11px; border-radius: var(--radius-sm); background: var(--panel2); border: 1px solid var(--line2); }
+  .msg.bad { background: rgba(255, 107, 107, 0.09); border-color: rgba(255, 107, 107, 0.3); color: #ffb9b9; }
+  .msg.warn { background: rgba(240, 185, 74, 0.09); border-color: rgba(240, 185, 74, 0.3); color: #ffe0a0; }
+  .msg:empty { display: none; }
+
+  details.help { margin-top: 8px; }
+  details.help > summary, details.fold > summary {
+    cursor: pointer; color: var(--dim); font-size: 12.5px; list-style: none; user-select: none; padding: 2px 0;
+  }
+  details.help > summary::-webkit-details-marker, details.fold > summary::-webkit-details-marker { display: none; }
+  details.help > summary::before, details.fold > summary::before { content: "▸"; display: inline-block; width: 14px; transition: transform 0.15s; }
+  details[open].help > summary::before, details[open].fold > summary::before { transform: rotate(90deg); }
+  details.help > summary:hover, details.fold > summary:hover { color: var(--text); }
+  details.fold > summary { color: #cdd7e6; font-size: 13.5px; font-weight: 500; padding: 6px 0; }
+  details.help .hint:first-of-type { margin-top: 4px; }
+
+  /* ---------- раскладка ---------- */
+  main { max-width: 1480px; margin: 0 auto; padding: 22px 20px 60px; display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr)); gap: 18px; min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+
+  section.card {
+    position: relative; background: linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent 70px), var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px 18px; min-width: 0;
+    box-shadow: var(--shadow); scroll-margin-top: 130px;
+  }
+  .sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; }
+  .sec-head h2 { font-size: 17px; margin: 0; letter-spacing: 0.01em; font-weight: 650; }
+  .sec-head .sub { flex-basis: 100%; margin: -4px 0 0; color: var(--dim); font-size: 13px; max-width: 90ch; }
+  .tag {
+    font-size: 10.5px; font-weight: 750; letter-spacing: 0.1em; padding: 3px 9px; border-radius: 6px;
+    color: #cfe3ff; background: rgba(108, 178, 255, 0.14); border: 1px solid rgba(108, 178, 255, 0.35);
+  }
+  .tag.nn { color: #e3d8ff; background: rgba(169, 139, 255, 0.15); border-color: rgba(169, 139, 255, 0.4); }
+  .sec-head .push { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  section.hero { border-color: #35527a; background:
+      radial-gradient(900px 220px at 0% 0%, rgba(108, 178, 255, 0.17), transparent 65%), var(--panel); }
+  section.hero.nn { border-color: #4a407c; background:
+      radial-gradient(900px 220px at 0% 0%, rgba(169, 139, 255, 0.17), transparent 65%), var(--panel); }
+
+  .divider { display: flex; align-items: center; gap: 14px; margin: 14px 2px 0; color: var(--dim); }
+  .divider h2 { margin: 0; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; }
+  .divider::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+
+  /* ---------- демо ---------- */
+  .demo-grid { display: grid; grid-template-columns: minmax(340px, 5fr) minmax(360px, 6fr); gap: 18px; align-items: start; }
+  .demo-view { position: sticky; top: 140px; }
+  @media (max-width: 960px) { .demo-grid { grid-template-columns: 1fr; } .demo-view { position: static; } }
+  .step {
+    border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px 12px; margin-bottom: 12px;
+    background: var(--panel2);
+  }
+  .step:last-child { margin-bottom: 0; }
+  .step h3 { margin: 0 0 8px; font-size: 14.5px; font-weight: 600; color: #dbe3ef; display: flex; align-items: center; gap: 10px; }
+  .step h3 b {
+    flex: none; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 8px; font-size: 12.5px;
+    background: linear-gradient(140deg, #3b86d8, #5f55c9); color: #fff;
+  }
+  .step label.chk { color: var(--text); display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 2px 0; }
+
+  /* ---------- нейросеть ---------- */
+  .nn-grid { display: grid; grid-template-columns: minmax(300px, 1.3fr) minmax(260px, 1fr); gap: 20px; align-items: center; }
+  @media (max-width: 860px) { .nn-grid { grid-template-columns: 1fr; } }
+  .nn-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .nn-actions button { padding: 10px 18px; font-size: 14px; }
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 700px) { .tiles { grid-template-columns: 1fr; } }
+  .tile {
+    background: var(--panel2); border: 1px solid var(--line2); border-radius: 14px; padding: 12px 14px;
+    position: relative; overflow: hidden;
+  }
+  .tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: linear-gradient(180deg, var(--accent), var(--accent2)); opacity: 0.8; }
+  .tile span { display: block; color: var(--dim); font-size: 12px; }
+  .tile b { display: block; margin-top: 3px; font-size: 22px; font-weight: 650; letter-spacing: -0.03em; }
+
+  /* ---------- общие блоки ---------- */
+  canvas { width: 100%; display: block; background: #080b10; border-radius: 12px; border: 1px solid var(--line2); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 20px; }
+  @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+  .kv { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dashed #222c3c; padding: 4px 0; }
+  .kv span:first-child { color: var(--dim); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .row label { color: var(--dim); }
+  .row.srow { display: grid; grid-template-columns: minmax(140px, 270px) minmax(120px, 1fr) minmax(46px, auto) auto; gap: 10px; }
+  .row.srow > span.mono { text-align: right; }
+  .row.srow > .unit { color: var(--faint); min-width: 3ch; }
+  @media (max-width: 640px) { .row.srow { grid-template-columns: 1fr auto; } .row.srow > input { grid-column: 1 / -1; grid-row: 2; } }
+  .row.stretch input[type=range] { flex: 1; min-width: 120px; }
+  .row.stretch label { flex: 0 0 92px; }
+
+  .pad { display: grid; grid-template-columns: repeat(3, 64px); gap: 8px; }
+  .pad button { height: 52px; padding: 0; font-weight: 600; background: #1b2434; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line2); border-radius: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1c2534; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
+  th { color: var(--dim); font-weight: 500; background: #0e131b; position: sticky; top: 0; }
+  td.num, th.num { text-align: right; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  .bar { position: relative; height: 12px; background: #080b10; border-radius: 6px; min-width: 140px; border: 1px solid #1c2534; }
+  .bar i { position: absolute; top: -1px; width: 3px; height: 12px; border-radius: 2px; }
+
+  .log { max-height: 240px; overflow: auto; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12px;
+         background: var(--panel2); border: 1px solid var(--line2); border-radius: 12px; padding: 6px 10px; }
+  .log div { padding: 3px 0; border-bottom: 1px solid #172030; }
+  .log div:last-child { border-bottom: 0; }
+  .lvl-ERROR { color: var(--bad); } .lvl-WARN { color: var(--warn); }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+    padding: 10px 18px; border-radius: 12px; background: #1b2740; border: 1px solid #3c5885; color: var(--text);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); transition: all 0.22s; z-index: 50; max-width: min(640px, 92vw);
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.bad { background: #3a1b1d; border-color: #8a3a3f; color: #ffc4c4; }
+</style>
+</head>
+<body>
+<header>
+  <div class="hwrap">
+    <div class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">P</span>
+        <div>
+          <h1>Pupper</h1>
+          <div class="brand-sub">пульт корпуса и походки</div>
+        </div>
+      </div>
+      <div class="statuses">
+        <span id="conn" class="pill">нет связи</span>
+        <span id="svc" class="pill">robot.service ?</span>
+        <span id="gait" class="pill">походка ?</span>
+        <span id="src" class="pill">источник ?</span>
+      </div>
+      <div class="estops">
+        <button id="stop" class="stop" title="Пробел">СТОП (пробел)</button>
+        <button id="estop" class="estop" title="Esc">АВАРИЯ (Esc)</button>
+      </div>
+    </div>
+    <div class="navrow">
+      <a class="chip hot" href="#demo">Демо-режим</a>
+      <a class="chip hot" href="#neural">Нейронная походка</a>
+      <span class="sep"></span>
+      <a class="chip" href="#pose-sec">Поза</a>
+      <a class="chip" href="#imu-sec">IMU</a>
+      <a class="chip" href="#map-sec">Карта</a>
+      <a class="chip" href="#manual-sec">Управление</a>
+      <a class="chip" href="#tg-sec">Генератор</a>
+      <a class="chip" href="#rec-sec">Запись</a>
+      <a class="chip" href="#joints-sec">Суставы</a>
+      <span class="sep"></span>
+      <button id="stand" class="sm" title="Без нейросети: плавно в default_joint_pos и держать">Стойка (без нейросети)</button>
+      <button id="revive" class="sm" title="Exit и сразу Enter всем моторам. Хоуминга нет. Момент пропадёт на долю секунды.">Оживить моторы</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ===== 1. Демонстрационный режим ===== -->
+  <section class="card hero" id="demo">
+    <div class="sec-head">
+      <span class="tag">ДЕМО</span>
+      <h2>Демонстрационный режим</h2>
+      <p class="sub">Хоуминг, треугольник обратной кинематики, стойка по IK и сервоприводы ушей. Робот должен лежать или висеть на подставке.</p>
+    </div>
+    <div class="demo-grid">
+      <div class="demo-view">
+        <canvas id="demo-pose" height="440"></canvas>
+        <div class="hint">Вид сбоку на выбранную ногу, тяни мышью, колесо — масштаб. Жёлтый треугольник — путь лапы. Яркая нога — как есть на роботе, полупрозрачная — куда её командует стойка.</div>
+        <div id="demo-tri-info" class="msg mono"></div>
+      </div>
+      <div>
+        <div class="step">
+          <h3><b>1</b>Хоуминг: робот узнаёт, где у него нули</h3>
+          <div class="row">
+            <span id="demo-homing-state" class="pill">статус неизвестен</span>
+          </div>
+          <div class="row">
+            <label>Порядок</label>
+            <select id="demo-hmode">
+              <option value="rear_first">Сначала задние, потом передние</option>
+              <option value="all">Все ноги сразу</option>
+            </select>
+          </div>
+          <div class="row srow" id="demo-hdelay-row">
+            <label>Пауза между задними и передними, с</label>
+            <input id="demo-hdelay" type="range" min="0" max="10" step="0.5" value="1.5"><span id="demo-hdelay-v" class="mono">1.5</span><span class="unit"></span>
+          </div>
+          <div class="row">
+            <button id="demo-home" class="primary">Хоуминг</button>
+          </div>
+          <div id="demo-homing-msg"></div>
+          <details class="help"><summary>Как это работает</summary>
+            <div class="hint">Каждая нога едет в упор колено → отведение → бедро, момент упирается в упор, и по нему запоминается ноль. Робот должен лежать или висеть на подставке: на время хоуминга моторы обмякают. Без успешного хоуминга «Стойка по IK» не включится.</div>
+          </details>
+        </div>
+
+        <div class="step">
+          <h3><b>2</b>Треугольник одной ноги</h3>
+          <div class="row">
+            <label>Нога</label>
+            <select id="demo-tri-leg">
+              <option value="front_r">ПП (перед-права)</option>
+              <option value="front_l">ПЛ (перед-лева)</option>
+              <option value="back_r">ЗП (зад-права)</option>
+              <option value="back_l">ЗЛ (зад-лева)</option>
+            </select>
+          </div>
+          <label class="chk"><input id="demo-tri" type="checkbox" checked> Показывать треугольник</label>
+          <label class="chk"><input id="demo-tri-labels" type="checkbox" checked> Подписи углов</label>
+          <label class="chk"><input id="demo-others" type="checkbox"> Показывать остальные ноги (бледно)</label>
+          <details class="help"><summary>Как это работает</summary>
+            <div class="hint">Лапа обходит три угла: вперёд по нижнему ребру, назад по нему же, затем в верхнюю точку и снова вперёд. Остальные ноги стоят. Так же, как в лабораторной CS123: одна нога, корпус на месте.</div>
+          </details>
+        </div>
+
+        <div class="step">
+          <h3><b>3</b>Анимация и настройки треугольника</h3>
+          <div class="row">
+            <button id="demo-anim-on" class="primary" title="Лапа пойдёт по рёбрам треугольника: вперёд-низ, назад-низ, верх">Запустить анимацию</button>
+            <button id="demo-anim-off" title="Плавно вернуть лапу на середину нижнего ребра">Погасить анимацию</button>
+            <span id="demo-state" class="pill">выкл</span>
+          </div>
+          <div class="row">
+            <button id="demo-stance" title="Плавно выехать в позу по настройкам треугольника без анимации">Стойка по IK</button>
+            <button id="demo-stand-default" title="Обычная стойка: суставы в default_joint_pos">Обычная стойка</button>
+            <button id="demo-release" title="kp = 0: ноги обмякнут">Расслабить</button>
+          </div>
+          <div id="demo-note" class="msg"></div>
+          <details class="fold" open>
+            <summary>Настройки треугольника</summary>
+            <div id="demo-sliders"></div>
+            <div class="row"><button id="demo-reset" class="sm">Сбросить настройки</button></div>
+            <details class="help"><summary>Что значат параметры</summary>
+              <div class="hint"><b>Нижнее ребро</b> — насколько лапа ниже плеча на двух нижних углах. <b>Половина основания</b> — вынос этих углов вперёд и назад (в лабораторной по 5 см). <b>Высота</b> — подъём верхней точки над ребром. В ролике верх на 6 см, но колено этого робота туда не достаёт: по умолчанию ребро опущено на 2 см, высота 4 см. Если поднять выше, пульт напишет, что колено упёрлось. «Погасить» плавно возвращает лапу на середину ребра. Робот должен висеть или лежать.</div>
+            </details>
+          </details>
+        </div>
+
+        <div class="step">
+          <h3><b>4</b>Сервоприводы ушей</h3>
+          <div class="row">
+            <span id="ear-state" class="pill">выкл</span>
+          </div>
+          <div class="row">
+            <button id="ear-zero" class="primary" title="Оба уха в положение 0 и держать">В ноль</button>
+            <button id="ear-a" title="Поставить оба уха в край A и держать">В край A</button>
+            <button id="ear-b" title="Поставить оба уха в край B и держать">В край B</button>
+          </div>
+          <div class="row">
+            <button id="ear-sync" class="primary" title="Оба уха вместе ходят от своего A к своему B">Вместе</button>
+            <button id="ear-mirror" title="Левое от A к B, правое наоборот">Зеркально</button>
+            <button id="ear-alt" title="Сначала правое A→B и отпуск, потом левое">По очереди</button>
+            <button id="ear-off" title="Снять импульс: уши обмякнут">Отпустить</button>
+          </div>
+          <div id="ear-note" class="msg"></div>
+          <div id="ear-sliders"></div>
+          <div class="row"><button id="ear-reset" class="sm">Сбросить края</button></div>
+          <details class="help"><summary>Подробнее про уши</summary>
+            <div class="hint">Края A и B задаются руками, от −1 до 1. Пока кнопка не нажата, ползунок ухо не двигает. Анимация берёт числа с ползунков сразу: сдвинул край во время движения — ухо поехало по новым краям. Сигнал ушей на GPIO 12 (контакт 32) и GPIO 13 (контакт 33), импульс аппаратный, 50 Гц. В нуле это ровные 1.5 мс. Ползунок свапа: 0 — левое на 12, правое на 13; 1 — левое на 13, правое на 12. «Отпустить», «СТОП» и «АВАРИЯ» выключают канал, импульс пропадает, ухо обмякает. Пока импульс есть, серва может греться, особенно если ухо упёрлось. GPIO 18 и 19 заняты звуковой картой.</div>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 2. Нейронная походка ===== -->
+  <section class="card hero nn" id="neural">
+    <div class="sec-head">
+      <span class="tag nn">НЕЙРОСЕТЬ</span>
+      <h2>Нейронная походка</h2>
+      <p class="sub">Политика ходьбы из нейросети. Включай походку, а наклон, который видит сеть, подкручивай ползунками на лету.</p>
+    </div>
+    <div class="nn-actions">
+      <button id="gait-on" class="primary">Включить походку</button>
+      <button id="gait-off">Выключить походку</button>
+      <span id="nn-state" class="pill">походка ?</span>
+    </div>
+    <div class="nn-grid" id="policy-offset">
+      <div>
+        <div class="row stretch">
+          <label>Тангаж</label>
+          <input id="off-pitch" class="off-slider" type="range" min="-30" max="30" step="0.5" value="17.5">
+          <span id="off-pitch-v" class="mono">17.5°</span>
+        </div>
+        <div class="row stretch">
+          <label>Крен</label>
+          <input id="off-roll" class="off-slider" type="range" min="-30" max="30" step="0.5" value="0">
+          <span id="off-roll-v" class="mono">0.0°</span>
+        </div>
+        <div class="row">
+          <button type="button" class="sm" data-pitch="15">15°</button>
+          <button type="button" class="sm primary" data-pitch="17.5">17.5°</button>
+          <button type="button" class="sm" data-pitch="20">20°</button>
+          <button type="button" class="sm" data-pitch="0">Ноль</button>
+        </div>
+      </div>
+      <div class="tiles" id="off-readout"></div>
+    </div>
+    <div id="off-note" class="msg" hidden></div>
+    <details class="help"><summary>Как работает оффсет наклона</summary>
+      <div class="hint">Roll и pitch в сеть не приходят числами. Туда уходит проекция гравитации, и эти оффсеты доворачивают её. Плюс по тангажу — сеть видит нос выше и опускает его. Плюс по крену — видит левый бок выше. Гироскоп не меняется. Ползунок применяется сразу, без перезапуска.</div>
+    </details>
+  </section>
+
+  <div class="divider"><h2>Остальное</h2></div>
+
+  <div class="grid">
+    <section class="card" id="pose-sec">
+      <div class="sec-head"><h2>Поза робота</h2><p class="sub">Суставы и датчик наклона</p></div>
+      <canvas id="pose" height="360"></canvas>
+      <div id="tilt" class="msg" style="font-size:17px;font-weight:600"></div>
+      <div id="feet" class="msg mono"></div>
+      <details class="help"><summary>Как читать картинку</summary>
+        <div class="hint">Яркие ноги — <b>как есть на роботе</b>. Полупрозрачные — <b>куда командует генератор</b>. Пол фиксированный (не «под нижней лапой»), поэтому если лапа волочится — она лежит на полу, а не «шагает в воздухе». Наклон корпуса берётся с датчика как есть, в том числе после падения. Камера сзади, тяни мышью. Цвета: <span style="color:var(--fr)">ПП</span>, <span style="color:var(--fl)">ПЛ</span>, <span style="color:var(--br)">ЗП</span>, <span style="color:var(--bl)">ЗЛ</span>.</div>
+      </details>
+    </section>
+
+    <section class="card" id="imu-sec">
+      <div class="sec-head"><h2>Гироскоп / IMU</h2></div>
+      <div class="grid2 mono" id="imu-kv"></div>
+      <div id="imu-msg"></div>
+      <canvas id="chart-att" height="150" style="margin-top:12px"></canvas>
+      <canvas id="chart-gyro" height="150" style="margin-top:8px"></canvas>
+      <details class="help"><summary>Проверка ориентации датчика</summary>
+        <div class="hint">Подними нос робота — pitch должен уйти в минус, «гравитация в корпусе» по X — тоже в минус. Опусти правый бок — roll уйдёт в плюс, гравитация по Y — в минус. Покрути робота вокруг вертикали против часовой — гиро z в плюс. Если знаки или оси другие, углы БНО в components.xacro заданы неверно, и политика походки видит мир повёрнутым.</div>
+      </details>
+    </section>
+
+    <section class="card" id="map-sec">
+      <div class="sec-head"><h2>Куда идти</h2></div>
+      <canvas id="map" height="360"></canvas>
+      <div class="hint">Клик по карте — идти в точку. Shift+клик — добавить точку в маршрут. Колесо — масштаб. Позиция считается по командам скорости и курсу IMU: это оценка, реальный робот проскальзывает. Коэффициент одометрии поправляет длину.</div>
+      <div class="row">
+        <button data-step='{"kind":"straight","m":0.5}'>Вперёд 0.5 м</button>
+        <button data-step='{"kind":"straight","m":1.0}'>Вперёд 1 м</button>
+        <button data-step='{"kind":"straight","m":-0.3}'>Назад 0.3 м</button>
+        <button data-step='{"kind":"turn","deg":90}'>Налево 90°</button>
+        <button data-step='{"kind":"turn","deg":-90}'>Направо 90°</button>
+        <button data-step='{"kind":"turn","deg":180}'>Разворот</button>
+      </div>
+      <div class="row">
+        <label>x</label><input id="gx" type="number" step="0.1" value="1.0">
+        <label>y</label><input id="gy" type="number" step="0.1" value="0.0">
+        <button id="goto" class="primary">Идти в (x, y)</button>
+        <button id="square">Квадрат 0.5 м</button>
+        <button id="odom-reset">Обнулить позицию</button>
+      </div>
+      <div id="mission" class="msg"></div>
+    </section>
+
+    <section class="card" id="manual-sec">
+      <div class="sec-head"><h2>Ручное управление</h2></div>
+      <div class="row" style="gap:24px; align-items:flex-start; flex-wrap:wrap">
+        <div class="pad">
+          <button data-k="q">⟲ Q</button><button data-k="w">▲ W</button><button data-k="e">⟳ E</button>
+          <button data-k="a">◀ A</button><button data-k="s">▼ S</button><button data-k="d">▶ D</button>
+        </div>
+        <div style="flex:1; min-width:260px">
+          <div class="row srow"><label>Вперёд макс, м/с</label><input id="vmax" type="range" min="0.05" max="0.75" step="0.05"><span id="vmax-v" class="mono"></span><span class="unit"></span></div>
+          <div class="row srow"><label>Вбок макс, м/с</label><input id="vymax" type="range" min="0.05" max="0.5" step="0.05"><span id="vymax-v" class="mono"></span><span class="unit"></span></div>
+          <div class="row srow"><label>Поворот макс, рад/с</label><input id="wmax" type="range" min="0.2" max="2.0" step="0.1"><span id="wmax-v" class="mono"></span><span class="unit"></span></div>
+          <div class="row srow"><label>Коэф. одометрии</label><input id="scale" type="range" min="0.2" max="2.0" step="0.05"><span id="scale-v" class="mono"></span><span class="unit"></span></div>
+        </div>
+      </div>
+      <div class="hint">Держи W/S — вперёд/назад, A/D — вбок, Q/E — поворот. Отпустил — робот останавливается (пульт перестаёт слать команды, через 0.35 с скорость обнуляется). Джойстик, если подключён, главнее пульта.</div>
+      <div class="grid2 mono" id="cmd-kv" style="margin-top:10px"></div>
+    </section>
+
+    <section class="card" id="tg-sec">
+      <div class="sec-head">
+        <h2>Генератор траекторий</h2>
+        <p class="sub">Шаг без нейросети</p>
+        <div class="push"><span id="tg-state" class="pill">выкл</span></div>
+      </div>
+      <div class="row">
+        <button id="tg-on" class="primary">Идти (генератор)</button>
+        <button id="tg-off">Остановить шаг</button>
+      </div>
+      <div id="tg-sliders"></div>
+      <div id="tg-imu-sliders"></div>
+      <div class="msg mono" id="tg-imu"></div>
+      <div class="msg mono" id="tg-note"></div>
+      <details class="help"><summary>Советы по настройке</summary>
+        <div class="hint">Рысь: диагонали ПП+ЗЛ и ПЛ+ЗП. Старт: ~0.9 раз/с, длина шага ±3.2 см, подъём лапы 2.8 см. Не тяни «Длина шага» сразу к 5–6 см — дёргается и валится; поднимай по полсантиметра, когда уже идёт ровно. Ползунки на ходу. «Остановить шаг»/пробел — в стойку; Esc — стоп.</div>
+        <div class="hint"><b>Ровнять корпус всегда включено</b> (по наклону). Лапы на опущенной стороне вытягиваются, на поднятой подгибаются, до ±1.5 см. «Сила»/«дожим» держи маленькими на шаге (дожим ≈0), иначе качает. На подставке, длина шага 0: нос вниз рукой — передние лапы должны вытянуться. Если наоборот — знаки датчика в components.xacro. Датчик молчит &gt;0.2 с — шаг гаснет.</div>
+      </details>
+    </section>
+
+    <section class="card" id="rec-sec">
+      <div class="sec-head">
+        <h2>Запись данных</h2>
+        <p class="sub">Для обучения</p>
+        <div class="push"><span id="rec-state" class="pill">не пишу</span></div>
+      </div>
+      <div class="row">
+        <input id="rec-note" type="text" style="flex:1" placeholder="что делаем: подставка/пол, покрытие, режим, kp">
+        <button id="rec-on" class="primary">● Записать</button>
+        <button id="rec-off">■ Стоп</button>
+      </div>
+      <div class="msg mono" id="rec-note-out"></div>
+      <details class="help"><summary>Что пишется</summary>
+        <div class="hint">Пишет ros2 bag в ~/pupper_data: суставы и IMU ~250 Гц, все команды с kp/kd, политику, cmd_vel. Изменения ползунков генератора во время записи сохраняются в meta.json. Одна запись — один режим и одно покрытие. ~360 МБ/час. Что и сколько писать — ai/rl/REAL_DATA.md.</div>
+      </details>
+    </section>
+
+    <section class="card wide" id="joints-sec">
+      <div class="sec-head"><h2>Суставы</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Сустав</th><th class="num">угол</th><th class="num">команда</th><th class="num">ошибка</th><th class="num">скорость</th><th class="num">момент</th><th class="num">kp</th><th>положение (шкала ±π): <span style="color:#8a93a3">▌стойка</span> <span style="color:var(--accent)">▌команда</span> <span style="color:var(--ok)">▌факт</span></th><th>хоуминг</th><th>поправка нуля</th></tr></thead>
+          <tbody id="joints"></tbody>
+        </table>
+      </div>
+      <div class="hint">Ошибка = команда минус реальный угол. Если на одном суставе она всё время большая, а у остальных маленькая — этот мотор не держит (снят момент или не хватает силы). Момент — что мотор сам сообщает.</div>
+      <details class="help"><summary>Стойка и подгонка нулей</summary>
+        <div class="hint">В «Стойке» пульт поднимает kp отстающему суставу от 12 до 20 (жёлтый = уже поднят). Цель остаётся у стойки и не уезжает вслед за ногой. У задней левой в колене мотор слабее, поэтому ему потолок 40. Если момент долго красный, мотор греется: сними стойку.</div>
+        <div class="hint"><b>Подгонка нулей.</b> Ноль свой у каждого из 12 суставов: бедро (_1, вперёд-назад), отведение (_2, вбок) и колено (_3). Подними робота на подставку, нажми «Стойка», затем −2°/+2° на нужной строке. Бедро — наклон назад примерно на 40° от вертикали, колено — голень вперёд-вниз примерно на 30°, отведение — нога вертикально, лапа под плечом. «Записать» переносит в components.xacro каждую строку, где поправка не 0°. Потом перезапусти robot.service.</div>
+      </details>
+      <div class="row" style="margin-top:10px">
+        <button id="trim-save" class="primary">Записать поправки в components.xacro</button>
+        <button id="trim-reset">Сбросить несохранённые</button>
+      </div>
+      <div class="msg mono" id="trim-note"></div>
+    </section>
+
+    <section class="card">
+      <div class="sec-head"><h2>Хоуминг этого запуска</h2></div>
+      <div id="homing-when" class="hint" style="margin-top:0"></div>
+      <div id="homing-notes"></div>
+    </section>
+
+    <section class="card">
+      <div class="sec-head"><h2>Предупреждения ROS</h2></div>
+      <div id="log" class="log"></div>
+    </section>
+  </div>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LEG_COLORS = { front_r: "#ff7a59", front_l: "#ffd166", back_r: "#4cc9f0", back_l: "#b388ff" };
+const LEG_RU = { front_r: "ПП", front_l: "ПЛ", back_r: "ЗП", back_l: "ЗЛ" };
+const JOINT_RU = (n) => {
+  const m = n.match(/leg_(front|back)_(l|r)_(\d)/);
+  const leg = (m[1] === "front" ? "перед" : "зад") + "-" + (m[2] === "l" ? "лев" : "прав");
+  return leg + " " + ["", "бедро", "отвед.", "колено"][Number(m[3])];
+};
+let S = null;
+let lastOk = 0;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+let toastTimer = 0;
+function flash(text, cls) {
+  const el = $("mission");
+  el.textContent = text;
+  el.className = "msg " + (cls || "");
+  const t = $("toast");
+  t.textContent = text;
+  t.className = "show " + (cls === "bad" ? "bad" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.className = ""), cls === "bad" ? 6000 : 3500);
+}
+const f = (v, d = 2) => (v === null || v === undefined ? "—" : Number(v).toFixed(d));
+
+// ---------- 3D поза ----------
+const cams = {
+  pose: { az: -2.9, el: 0.35, dist: 0.75 },
+  "demo-pose": { az: -1.35, el: 0.12, dist: 0.4 },
+};
+function orbit(id) {
+  const c = $(id), cam = cams[id];
+  let drag = null;
+  c.addEventListener("mousedown", (e) => (drag = [e.clientX, e.clientY]));
+  window.addEventListener("mouseup", () => (drag = null));
+  window.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    cam.az -= (e.clientX - drag[0]) * 0.01;
+    cam.el = Math.max(-0.2, Math.min(1.45, cam.el + (e.clientY - drag[1]) * 0.01));
+    drag = [e.clientX, e.clientY];
+    drawPose();
+  });
+  c.addEventListener("wheel", (e) => { e.preventDefault(); cam.dist = Math.max(0.3, Math.min(2, cam.dist * (e.deltaY > 0 ? 1.1 : 0.9))); drawPose(); }, { passive: false });
+}
+orbit("pose");
+orbit("demo-pose");
+
+function qmul(a, b) {
+  return [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ];
+}
+function qrot(q, v) {
+  const [x, y, z, w] = q;
+  const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
+}
+function levelQuat(imu) {
+  if (!imu || !imu.q) return [0, 0, 0, 1];
+  const yaw = imu.yaw * Math.PI / 180;
+  const qz = [0, 0, -Math.sin(yaw / 2), Math.cos(yaw / 2)];
+  return qmul(qz, imu.q);
+}
+function sizeCanvas(c) {
+  if (!c.dataset.cssHeight) {
+    c.dataset.cssHeight = c.getAttribute("height");
+    c.style.height = c.dataset.cssHeight + "px";
+  }
+  const w = c.clientWidth;
+  const h = Number(c.dataset.cssHeight);
+  const pw = Math.round(w * devicePixelRatio), ph = Math.round(h * devicePixelRatio);
+  if (c.width !== pw || c.height !== ph) {
+    c.width = pw;
+    c.height = ph;
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(pw / w, 0, 0, ph / h, 0, 0);
+  return [ctx, w, h];
+}
+function legGeometry(l) {
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const norm = (v) => Math.hypot(v[0], v[1], v[2]);
+  const HK = sub(l.knee, l.hip), KF = sub(l.foot, l.knee), HF = sub(l.foot, l.hip);
+  const a = norm(HK), b = norm(KF), c = norm(HF);
+  const cosK = -(HK[0] * KF[0] + HK[1] * KF[1] + HK[2] * KF[2]) / (a * b);
+  return { a, b, c, h: l.hip[2] - l.foot[2], kneeDeg: Math.acos(Math.max(-1, Math.min(1, cosK))) * 180 / Math.PI };
+}
+function drawPose() {
+  drawScene("pose");
+  drawScene("demo-pose");
+}
+function drawScene(canvasId) {
+  const cam = cams[canvasId];
+  const demoView = canvasId === "demo-pose";
+  const showTri = demoView && $("demo-tri").checked;
+  const demoLeg = $("demo-tri-leg").value;
+  const [ctx, W, H] = sizeCanvas($(canvasId));
+  ctx.clearRect(0, 0, W, H);
+  const eye = [cam.dist * Math.cos(cam.el) * Math.cos(cam.az), cam.dist * Math.cos(cam.el) * Math.sin(cam.az), cam.dist * Math.sin(cam.el)];
+  const fw = eye.map((v) => -v / cam.dist);
+  let rt = [fw[1], -fw[0], 0];
+  const rn = Math.hypot(...rt) || 1;
+  rt = rt.map((v) => v / rn);
+  const up = [rt[1] * fw[2] - rt[2] * fw[1], rt[2] * fw[0] - rt[0] * fw[2], rt[0] * fw[1] - rt[1] * fw[0]];
+  const F = Math.min(W, H) * 1.3;
+  // Демо-вид смотрит на выбранную ногу: центр кадра — под её плечом, на полпути к лапе.
+  let focus = [0, 0, 0];
+  const legsNow = S && (S.legs || S.legs_cmd);
+  const focusLeg = legsNow && legsNow[demoLeg];
+  if (demoView && focusLeg) focus = [focusLeg.hip[0], focusLeg.hip[1], focusLeg.hip[2] - 0.07];
+  const P = (p) => {
+    const d = [p[0] - focus[0] - eye[0], p[1] - focus[1] - eye[1], p[2] - focus[2] - eye[2]];
+    const z = d[0] * fw[0] + d[1] * fw[1] + d[2] * fw[2];
+    return [W / 2 + F * (d[0] * rt[0] + d[1] * rt[1] + d[2] * rt[2]) / z, H / 2 - F * (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / z];
+  };
+  const line = (a, b, color, w = 1) => {
+    const A = P(a), B = P(b);
+    ctx.strokeStyle = color; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+  };
+  // В демо корпус рисуется ровно, без наклона IMU: смотрим на геометрию ноги, а не на качание.
+  const q = demoView ? [0, 0, 0, 1] : levelQuat(S && S.imu);
+  const R = (p) => qrot(q, p);
+
+  // Пол фиксированный в кадре корпуса: иначе «пол под нижней лапой» всегда рисует шаг в воздухе.
+  const groundZ = (S && S.ground_z != null) ? S.ground_z : -0.14;
+  for (let i = -5; i <= 5; i++) {
+    line([i * 0.05, -0.25, groundZ], [i * 0.05, 0.25, groundZ], "#1f2630");
+    line([-0.25, i * 0.05, groundZ], [0.25, i * 0.05, groundZ], "#1f2630");
+  }
+  line([0, 0, groundZ], [0, 0, groundZ + 0.25], "#2c3a4a");
+
+  const bx = 0.12, by = 0.06, bz = 0.03;
+  const c = [];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) c.push(R([sx * bx, sy * by, sz * bz]));
+  const edges = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+  for (const [a, b] of edges) line(c[a], c[b], "#7d8898", 1.5);
+  for (const [a, b] of [[4, 5], [5, 7], [7, 6], [6, 4]]) line(c[a], c[b], "#5fd08a", 3);
+  line(R([bx, 0, bz]), R([bx + 0.06, 0, bz]), "#5fd08a", 2);
+
+  const drawLegs = (legs, alpha, width) => {
+    if (!legs) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    for (const [leg, l] of Object.entries(legs)) {
+      const col = LEG_COLORS[leg];
+      line(R(l.hip), R(l.knee), col, width);
+      line(R(l.knee), R(l.foot), col, width);
+      const ft = P(R(l.foot));
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(ft[0], ft[1], alpha < 1 ? 3 : 5, 0, 7); ctx.fill();
+      if (alpha >= 1) {
+        ctx.font = "12px system-ui"; ctx.fillText(LEG_RU[leg], ft[0] + 7, ft[1] + 4);
+      }
+    }
+    ctx.restore();
+  };
+  // Траектория лапы: три угла в base_link (вперёд-низ, назад-низ, верх).
+  const drawPath = () => {
+    const tri = S && S.demo && S.demo.tri;
+    if (!showTri || !tri || tri.length !== 3) return;
+    const labels = $("demo-tri-labels").checked;
+    const pts = tri.map((p) => P(R(p)));
+    const mid3 = [(tri[0][0] + tri[1][0]) / 2, (tri[0][1] + tri[1][1]) / 2, (tri[0][2] + tri[1][2]) / 2];
+    ctx.save();
+    ctx.globalAlpha = 0.22; ctx.fillStyle = "#f0b94a";
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); ctx.lineTo(pts[1][0], pts[1][1]); ctx.lineTo(pts[2][0], pts[2][1]); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = "#f0b94a"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); ctx.lineTo(pts[1][0], pts[1][1]); ctx.lineTo(pts[2][0], pts[2][1]); ctx.closePath(); ctx.stroke();
+    ctx.setLineDash([5, 4]);
+    line(R(mid3), R(tri[2]), "#f0b94a", 1.5);
+    ctx.setLineDash([]);
+    const names = ["вперёд", "назад", "верх"];
+    ctx.font = "12px ui-monospace, Consolas"; ctx.fillStyle = "#f0b94a";
+    pts.forEach((p, i) => {
+      ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, 7); ctx.fill();
+      if (labels) ctx.fillText(names[i], p[0] + 6, p[1] - 4);
+    });
+    if (labels && S.demo.params) {
+      const base = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
+      const top = pts[2];
+      ctx.fillStyle = "#e6e9ee";
+      ctx.fillText(`основание ${f(S.demo.params.anim_x * 200, 1)} см`, base[0] + 6, base[1] + 14);
+      ctx.fillStyle = "#f0b94a";
+      ctx.fillText(`h ${f(S.demo.params.anim_h * 100, 1)} см`, (base[0] + top[0]) / 2 + 6, (base[1] + top[1]) / 2);
+    }
+    ctx.restore();
+  };
+
+  if (demoView) {
+    // Только выбранная нога; остальные — бледным фоном, если включено.
+    const only = (legs) => (legs && legs[demoLeg] ? { [demoLeg]: legs[demoLeg] } : null);
+    const rest = (legs) => (legs ? Object.fromEntries(Object.entries(legs).filter(([k]) => k !== demoLeg)) : null);
+    const actual = S && (S.legs || S.legs_cmd);
+    if ($("demo-others").checked) drawLegs(rest(actual), 0.25, 2);
+    if (S && S.legs_cmd) drawLegs(only(S.legs_cmd), 0.35, 2);
+    if (S && S.legs) drawLegs(only(S.legs), 1, 4);
+    else {
+      ctx.fillStyle = "#8a93a3"; ctx.fillText("нет TF суставов (robot_state_publisher?)", 10, 20);
+    }
+    drawPath();
+  } else {
+    // Сначала призрак команды, поверх — факт.
+    if (S && S.legs_cmd) drawLegs(S.legs_cmd, 0.35, 2);
+    if (S && S.legs) drawLegs(S.legs, 1, 4);
+    else {
+      ctx.fillStyle = "#8a93a3"; ctx.fillText("нет TF суставов (robot_state_publisher?)", 10, 20);
+    }
+  }
+  if (demoView) return;
+  if (S && S.imu) {
+    ctx.fillStyle = "#cfd6e0"; ctx.font = "13px ui-monospace, Consolas";
+    ctx.fillText(`roll ${f(S.imu.roll, 1)}°  pitch ${f(S.imu.pitch, 1)}°`, 10, H - 10);
+  }
+}
+
+// ---------- графики ----------
+function chart(id, hist, series, range, unit) {
+  const [ctx, W, H] = sizeCanvas($(id));
+  ctx.clearRect(0, 0, W, H);
+  const T = 12;
+  const X = (t) => W - 4 + (t / T) * (W - 40);
+  const Y = (v) => H / 2 - (v / range) * (H / 2 - 10);
+  ctx.strokeStyle = "#232a33"; ctx.lineWidth = 1;
+  for (const v of [-range, -range / 2, 0, range / 2, range]) { ctx.beginPath(); ctx.moveTo(36, Y(v)); ctx.lineTo(W, Y(v)); ctx.stroke(); }
+  ctx.fillStyle = "#6b7482"; ctx.font = "11px ui-monospace, Consolas";
+  for (const v of [-range, 0, range]) ctx.fillText(String(v), 2, Y(v) + 4);
+  ctx.fillText(unit, 2, 12);
+  series.forEach(([idx, color, name], k) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
+    hist.forEach((h, i) => { const x = X(h[0]), y = Y(Math.max(-range, Math.min(range, h[idx]))); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+    ctx.fillStyle = color; ctx.fillText(name, 44 + k * 70, 12);
+  });
+}
+
+// ---------- карта ----------
+const map = { scale: 120, goalsPreview: [] };
+function mapTransform(W, H) {
+  const o = S ? S.odom : { x: 0, y: 0 };
+  return {
+    toPx: (x, y) => [W / 2 - (y - o.y) * map.scale, H / 2 - (x - o.x) * map.scale],
+    toWorld: (px, py) => [o.x + (H / 2 - py) / map.scale, o.y + (W / 2 - px) / map.scale],
+  };
+}
+function drawMap() {
+  const [ctx, W, H] = sizeCanvas($("map"));
+  ctx.clearRect(0, 0, W, H);
+  const { toPx } = mapTransform(W, H);
+  const o = S ? S.odom : { x: 0, y: 0, yaw: 0, trail: [] };
+  const step = map.scale > 80 ? 0.25 : 0.5;
+  ctx.strokeStyle = "#1c232c"; ctx.lineWidth = 1;
+  const span = Math.max(W, H) / map.scale;
+  for (let g = Math.floor((o.x - span) / step) * step; g < o.x + span; g += step) { const a = toPx(g, o.y - span), b = toPx(g, o.y + span); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+  for (let g = Math.floor((o.y - span) / step) * step; g < o.y + span; g += step) { const a = toPx(o.x - span, g), b = toPx(o.x + span, g); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+  const z = toPx(0, 0);
+  ctx.strokeStyle = "#39475a"; ctx.beginPath(); ctx.arc(z[0], z[1], 6, 0, 7); ctx.stroke();
+  ctx.fillStyle = "#6b7482"; ctx.font = "11px system-ui"; ctx.fillText("старт", z[0] + 8, z[1] - 6);
+
+  ctx.strokeStyle = "#5aa9ff88"; ctx.lineWidth = 2; ctx.beginPath();
+  o.trail.forEach((p, i) => { const q = toPx(p[0], p[1]); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+  ctx.stroke();
+
+  const goals = S ? S.mission.filter((m) => m.kind === "goal") : [];
+  let prev = toPx(o.x, o.y);
+  goals.forEach((g, i) => {
+    const p = toPx(g.x, g.y);
+    ctx.strokeStyle = "#f0b94a"; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#f0b94a"; ctx.beginPath(); ctx.arc(p[0], p[1], 6, 0, 7); ctx.fill();
+    ctx.fillStyle = "#000"; ctx.font = "bold 10px system-ui"; ctx.fillText(String(i + 1), p[0] - 3, p[1] + 4);
+    prev = p;
+  });
+
+  const r = toPx(o.x, o.y);
+  const hdg = -o.yaw - Math.PI / 2;
+  ctx.save(); ctx.translate(r[0], r[1]); ctx.rotate(hdg);
+  ctx.fillStyle = S && S.gait ? "#5fd08a" : "#8a93a3";
+  ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-10, 9); ctx.lineTo(-6, 0); ctx.lineTo(-10, -9); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = "#cfd6e0"; ctx.font = "12px ui-monospace, Consolas";
+  ctx.fillText(`x ${f(o.x)} м  y ${f(o.y)} м  курс ${f(o.yaw * 180 / Math.PI, 0)}°   сетка ${step} м`, 8, H - 8);
+}
+$("map").addEventListener("wheel", (e) => { e.preventDefault(); map.scale = Math.max(20, Math.min(600, map.scale * (e.deltaY > 0 ? 0.9 : 1.1))); drawMap(); }, { passive: false });
+$("map").addEventListener("click", async (e) => {
+  const rect = $("map").getBoundingClientRect();
+  const { toWorld } = mapTransform(rect.width, rect.height);
+  const [x, y] = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+  try { await api("/api/mission", { steps: [{ kind: "goal", x, y }], append: e.shiftKey }); }
+  catch (err) { flash(String(err.message), "bad"); }
+});
+
+// ---------- ручное управление ----------
+const held = new Set();
+const KEYS = { w: [1, 0, 0], s: [-1, 0, 0], a: [0, 1, 0], d: [0, -1, 0], q: [0, 0, 1], e: [0, 0, -1] };
+function manualVec() {
+  const v = [0, 0, 0];
+  for (const k of held) KEYS[k].forEach((c, i) => (v[i] += c));
+  return v.map((c) => Math.max(-1, Math.min(1, c)));
+}
+function paintPad() { document.querySelectorAll(".pad button").forEach((b) => b.classList.toggle("held", held.has(b.dataset.k))); }
+async function sendManual() {
+  if (!held.size) return;
+  const [vx, vy, wz] = manualVec();
+  try { await api("/api/cmd", { vx, vy, wz }); } catch (err) { flash(String(err.message), "bad"); }
+}
+setInterval(sendManual, 100);
+function press(k) { if (!KEYS[k] || held.has(k)) return; held.add(k); paintPad(); sendManual(); }
+function release(k) { if (!held.delete(k)) return; paintPad(); if (!held.size) api("/api/stop", {}); }
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const k = e.key.toLowerCase();
+  const map_ = { ц: "w", ы: "s", ф: "a", в: "d", й: "q", у: "e" };
+  const key = map_[k] || k;
+  if (e.code === "Space") { e.preventDefault(); held.clear(); paintPad(); api("/api/stop", {}); return; }
+  if (e.key === "Escape") { held.clear(); paintPad(); api("/api/estop", {}); return; }
+  if (KEYS[key]) { e.preventDefault(); press(key); }
+});
+window.addEventListener("keyup", (e) => {
+  const k = e.key.toLowerCase();
+  const map_ = { ц: "w", ы: "s", ф: "a", в: "d", й: "q", у: "e" };
+  release(map_[k] || k);
+});
+window.addEventListener("blur", () => { if (held.size) { held.clear(); paintPad(); api("/api/stop", {}); } });
+document.querySelectorAll(".pad button").forEach((b) => {
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); press(b.dataset.k); });
+  b.addEventListener("pointerup", () => release(b.dataset.k));
+  b.addEventListener("pointercancel", () => release(b.dataset.k));
+});
+
+$("stop").onclick = () => { held.clear(); paintPad(); api("/api/stop", {}); };
+$("estop").onclick = () => { held.clear(); paintPad(); api("/api/estop", {}); };
+$("gait-on").onclick = async () => { try { await api("/api/gait", { on: true }); flash("походка включается…"); } catch (e) { flash(e.message, "bad"); } };
+$("stand").onclick = async () => { try { await api("/api/stand", {}); flash("встаю в стойку за 3 с, где не хватает сил — добавлю…"); } catch (e) { flash(e.message, "bad"); } };
+$("revive").onclick = async () => { try { await api("/api/revive", {}); flash("Exit и Enter всем моторам, без хоуминга. Момент на долю секунды пропадёт."); } catch (e) { flash(e.message, "bad"); } };
+// Таблица перерисовывается каждый кадр, click между mousedown и mouseup теряется.
+$("joints").addEventListener("pointerdown", async (e) => {
+  const b = e.target.closest("button[data-trim]");
+  if (!b || b.disabled) return;
+  try { await api("/api/trim", { index: Number(b.dataset.trim), delta: Number(b.dataset.d) }); } catch (err) { flash(err.message, "bad"); }
+});
+$("trim-save").onclick = async () => {
+  if (!confirm("Записать поправки в components.xacro? Применятся после перезапуска robot.service.")) return;
+  try { await api("/api/trim_save", {}); flash("записано"); } catch (e) { flash(e.message, "bad"); }
+};
+$("trim-reset").onclick = async () => { try { await api("/api/trim", { reset: true }); } catch (e) { flash(e.message, "bad"); } };
+$("gait-off").onclick = async () => { try { await api("/api/gait", { on: false }); } catch (e) { flash(e.message, "bad"); } };
+document.querySelectorAll("[data-step]").forEach((b) => (b.onclick = async () => {
+  try { await api("/api/mission", { steps: [JSON.parse(b.dataset.step)], append: false }); } catch (e) { flash(e.message, "bad"); }
+}));
+$("goto").onclick = async () => {
+  try { await api("/api/mission", { steps: [{ kind: "goal", x: Number($("gx").value), y: Number($("gy").value) }] }); } catch (e) { flash(e.message, "bad"); }
+};
+$("square").onclick = async () => {
+  const s = [];
+  for (let i = 0; i < 4; i++) s.push({ kind: "straight", m: 0.5 }, { kind: "turn", deg: 90 });
+  try { await api("/api/mission", { steps: s }); } catch (e) { flash(e.message, "bad"); }
+};
+$("odom-reset").onclick = () => api("/api/odom_reset", {});
+
+const TG_SLIDERS = [
+  ["freq", "Как часто шагает, раз/с", 0.3, 3.0, 0.1],
+  ["stride", "Длина шага вперёд, м (0 = топчется)", 0.0, 0.06, 0.002],
+  ["lift", "Насколько поднимает лапу, м", 0.0, 0.06, 0.002],
+  ["height", "Выше/ниже корпус, м", -0.03, 0.03, 0.002],
+  ["swing", "Сколько времени лапа в воздухе", 0.3, 0.7, 0.05],
+  ["turn", "Поворот (+ налево, − направо)", -1.0, 1.0, 0.05],
+  ["kp", "Жёсткость суставов", 4, 40, 0.5],
+  ["kd", "Гашение дрожи суставов", 0.1, 1.0, 0.05],
+];
+const TG_IMU_SLIDERS = [
+  ["imu_gain", "Ровнять корпус: сила", 0.0, 1.5, 0.05],
+  ["imu_ki", "Ровнять корпус: дожим", 0.0, 2.0, 0.05],
+  ["imu_damp", "Ровнять корпус: антираскачка", 0.0, 0.2, 0.005],
+];
+const sliderRow = ([id, label, lo, hi, st]) =>
+  `<div class="row srow"><label>${label}</label><input id="tg-${id}" type="range" min="${lo}" max="${hi}" step="${st}"><span id="tg-${id}-v" class="mono"></span><span class="unit"></span></div>`;
+$("tg-sliders").innerHTML = TG_SLIDERS.map(sliderRow).join("");
+$("tg-imu-sliders").innerHTML = TG_IMU_SLIDERS.map(sliderRow).join("");
+for (const [id] of [...TG_SLIDERS, ...TG_IMU_SLIDERS]) {
+  $("tg-" + id).addEventListener("input", () => {
+    $("tg-" + id + "-v").textContent = $("tg-" + id).value;
+    api("/api/tg_params", { [id]: Number($("tg-" + id).value) }).catch((e) => flash(e.message, "bad"));
+  });
+}
+$("tg-on").onclick = async () => { try { await api("/api/tg", { on: true }); flash("генератор: еду в стойку, потом шаг"); } catch (e) { flash(e.message, "bad"); } };
+$("tg-off").onclick = async () => { try { await api("/api/tg", { on: false }); } catch (e) { flash(e.message, "bad"); } };
+let tgInit = false;
+$("rec-on").onclick = async () => {
+  const note = $("rec-note").value.trim();
+  if (!note) { flash("напиши, что записываем", "bad"); return; }
+  try { await api("/api/record", { on: true, note }); flash("запись пошла"); } catch (e) { flash(e.message, "bad"); }
+};
+$("rec-off").onclick = async () => { try { await api("/api/record", { on: false }); flash("запись сохранена"); } catch (e) { flash(e.message, "bad"); } };
+
+let limitsInit = false;
+for (const id of ["vmax", "vymax", "wmax", "scale"]) {
+  $(id).addEventListener("input", () => { $(id + "-v").textContent = $(id).value; });
+  $(id).addEventListener("change", () => api("/api/limits", { [id]: Number($(id).value) }));
+}
+
+// ---------- демонстрационный режим ----------
+// [id, подпись, множитель «единица сервера → экран», шаг на экране, единица]
+const DEMO_SLIDERS = [
+  ["height", "Нижнее ребро: плечо → лапа", 100, 0.1, "см", 1],
+  ["shift_x", "Середина ребра вперёд (+) / назад (−)", 100, 0.1, "см", 1],
+  ["spread", "Середина ребра в сторону", 100, 0.1, "см", 1],
+  ["anim_h", "Высота треугольника (подъём верха)", 100, 0.1, "см", 1],
+  ["anim_x", "Половина основания (вперёд и назад)", 100, 0.1, "см", 1],
+  ["anim_T", "Период обхода", 1, 0.5, "с", 1],
+  ["kp", "Жёсткость суставов kp", 1, 0.5, "", 1],
+  ["kd", "Гашение дрожи kd", 1, 0.05, "", 2],
+  ["ramp", "Время выезда в стойку", 1, 0.5, "с", 1],
+  ["follow", "Скорость отслеживания ползунка", 100, 0.1, "см/с", 1],
+];
+const STAGE_RU = ["колено", "отведение", "бедро"];
+let demoInit = false;
+function demoMsg(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "msg " + (cls || "");
+  el.hidden = !text;
+}
+function initDemoSliders(d) {
+  $("demo-sliders").innerHTML = DEMO_SLIDERS.map(([id, label, k, st, unit]) => {
+    const [lo, hi] = d.limits[id];
+    return `<div class="row srow"><label>${label}</label><input id="demo-${id}" type="range" min="${(lo * k).toFixed(2)}" max="${(hi * k).toFixed(2)}" step="${st}"><span id="demo-${id}-v" class="mono"></span><span class="unit">${unit}</span></div>`;
+  }).join("");
+  for (const [id, , k, , , dec] of DEMO_SLIDERS) {
+    $("demo-" + id).addEventListener("input", () => {
+      $("demo-" + id + "-v").textContent = Number($("demo-" + id).value).toFixed(dec);
+      api("/api/demo_params", { [id]: Number($("demo-" + id).value) / k }).catch((e) => demoMsg("demo-note", e.message, "bad"));
+    });
+  }
+}
+function syncDemoValues(d) {
+  for (const [id, , k, , , dec] of DEMO_SLIDERS) {
+    $("demo-" + id).value = d.params[id] * k;
+    $("demo-" + id + "-v").textContent = (d.params[id] * k).toFixed(dec);
+  }
+  $("demo-tri-leg").value = d.params.leg;
+  pointCameraAtLeg();
+}
+function pointCameraAtLeg() {
+  // Смотрим на ногу со стороны её борта, чтобы она была ближе всего к камере.
+  cams["demo-pose"].az = $("demo-tri-leg").value.endsWith("_l") ? 1.35 : -1.35;
+  drawPose();
+}
+$("demo-tri").addEventListener("change", drawPose);
+$("demo-tri-labels").addEventListener("change", drawPose);
+$("demo-others").addEventListener("change", drawPose);
+$("demo-tri-leg").addEventListener("change", async () => {
+  pointCameraAtLeg();
+  try { await api("/api/demo_params", { leg: $("demo-tri-leg").value }); } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+});
+$("demo-hmode").addEventListener("change", () => { $("demo-hdelay-row").hidden = $("demo-hmode").value === "all"; });
+$("demo-hdelay").addEventListener("input", () => { $("demo-hdelay-v").textContent = $("demo-hdelay").value; });
+$("demo-home").onclick = async () => {
+  if (!confirm("Моторы обмякнут и поедут в упоры. Робот должен лежать или висеть на подставке, а не стоять на лапах. Запустить хоуминг?")) return;
+  try {
+    await api("/api/demo_homing", { mode: $("demo-hmode").value, delay: Number($("demo-hdelay").value) });
+    demoMsg("demo-homing-msg", "хоуминг запрошен…", "");
+  } catch (e) { demoMsg("demo-homing-msg", e.message, "bad"); }
+};
+$("demo-stance").onclick = async () => {
+  try { await api("/api/demo_stance", {}); } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+};
+$("demo-stand-default").onclick = async () => {
+  try { await api("/api/stand", {}); demoMsg("demo-note", "обычная стойка: суставы в default_joint_pos", ""); } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+};
+$("demo-anim-on").onclick = async () => {
+  try { await api("/api/demo_anim", { on: true }); } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+};
+$("demo-anim-off").onclick = async () => {
+  try { await api("/api/demo_anim", { on: false }); } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+};
+$("demo-release").onclick = async () => {
+  try { await api("/api/demo_release", {}); } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+};
+$("demo-reset").onclick = async () => {
+  try { await api("/api/demo_params", { reset: true }); demoInit = false; } catch (e) { demoMsg("demo-note", e.message, "bad"); }
+};
+
+const EAR_SLIDERS = [
+  ["a_l", "Левое ухо, край A", 1, 0.05, "", 2],
+  ["b_l", "Левое ухо, край B", 1, 0.05, "", 2],
+  ["a_r", "Правое ухо, край A", 1, 0.05, "", 2],
+  ["b_r", "Правое ухо, край B", 1, 0.05, "", 2],
+  ["period", "Период анимации", 1, 0.1, "с", 1],
+  ["swap", "Свап пинов", 1, 1, "", 0],
+];
+const EAR_RU = { zero: "ноль", a: "край A", b: "край B", sync: "вместе", mirror: "зеркально", alt: "по очереди" };
+function earShown(id, value, dec) {
+  if (id === "swap") return Number(value) >= 0.5 ? "левое 13, правое 12" : "левое 12, правое 13";
+  return Number(value).toFixed(dec);
+}
+let earInit = false;
+function initEarSliders(e) {
+  $("ear-sliders").innerHTML = EAR_SLIDERS.map(([id, label, k, st, unit]) => {
+    const [lo, hi] = e.limits[id];
+    return `<div class="row srow"><label>${label}</label><input id="ear-${id}" type="range" min="${(lo * k).toFixed(2)}" max="${(hi * k).toFixed(2)}" step="${st}"><span id="ear-${id}-v" class="mono"></span><span class="unit">${unit}</span></div>`;
+  }).join("");
+  for (const [id, , k, , , dec] of EAR_SLIDERS) {
+    $("ear-" + id).addEventListener("input", () => {
+      $("ear-" + id + "-v").textContent = earShown(id, $("ear-" + id).value, dec);
+      api("/api/ears_params", { [id]: Number($("ear-" + id).value) / k }).catch((err) => demoMsg("ear-note", err.message, "bad"));
+    });
+  }
+}
+function syncEarValues(e) {
+  for (const [id, , k, , , dec] of EAR_SLIDERS) {
+    $("ear-" + id).value = e.params[id] * k;
+    $("ear-" + id + "-v").textContent = earShown(id, e.params[id] * k, dec);
+  }
+}
+for (const mode of ["zero", "a", "b", "sync", "mirror", "alt", "off"]) {
+  $("ear-" + mode).onclick = async () => {
+    try { await api("/api/ears", { mode }); } catch (e) { demoMsg("ear-note", e.message, "bad"); }
+  };
+}
+$("ear-reset").onclick = async () => {
+  try { await api("/api/ears_params", { reset: true }); earInit = false; } catch (e) { demoMsg("ear-note", e.message, "bad"); }
+};
+function renderEars(s) {
+  const e = s.ears;
+  if (!e) return;
+  if (!earInit) {
+    if (!$("ear-a_l")) initEarSliders(e);
+    syncEarValues(e);
+    earInit = true;
+  }
+  pill($("ear-state"), e.mode ? EAR_RU[e.mode] : "выкл", e.mode ? "ok" : "");
+  demoMsg("ear-note", e.error || e.note, e.error ? "bad" : "");
+}
+
+function renderDemo(s) {
+  const d = s.demo;
+  if (!demoInit) {
+    if (!$("demo-height")) initDemoSliders(d);
+    syncDemoValues(d);
+    demoInit = true;
+  }
+  const h = d.homing, st = h.status;
+  const running = !!st && st.state === "running";
+  const waiting = h.requested && !h.error && !running;
+  if (h.error) pill($("demo-homing-state"), "хоуминг: нет ответа", "bad");
+  else if (waiting) pill($("demo-homing-state"), "хоуминг запрошен…", "warn");
+  else if (!st) pill($("demo-homing-state"), "хоуминг: статус неизвестен", "warn");
+  else if (running) {
+    const where = st.mode === "all" ? "все ноги" : st.stage < 0 ? "" : st.stage < 3 ? "задние ноги" : "передние ноги";
+    pill($("demo-homing-state"), "хоуминг идёт" + (st.stage >= 0 ? ` · ${where}: ${STAGE_RU[st.stage % 3]}` : ""), "warn");
+  } else if (st.state === "done" && st.skipped.length) pill($("demo-homing-state"), `хоуминг: ${st.skipped.length} суст. без нуля`, "bad");
+  else if (st.state === "done") pill($("demo-homing-state"), "хоуминг выполнен: нули найдены", "ok");
+  else pill($("demo-homing-state"), "хоуминга при запуске не было", "bad");
+
+  const hm = [];
+  if (h.error) hm.push(["bad", h.error]);
+  if (st && st.skipped.length) hm.push(["bad", "Без нуля и без момента: " + st.skipped.map(JOINT_RU).join(", ") + ". Нужен новый хоуминг."]);
+  if (!st && !h.requested) hm.push(["warn", "Статус придёт от robot.service. Если после кнопки «Хоуминг» ничего не приходит — пересобери control_board_hardware_interface и перезапусти robot.service."]);
+  $("demo-homing-msg").innerHTML = hm.map(([c, t]) => `<div class="msg ${c}">${t}</div>`).join("");
+  $("demo-home").disabled = running || waiting;
+  const canMove = h.homed && !h.requested;
+  $("demo-stance").disabled = !canMove;
+  $("demo-anim-on").disabled = !canMove || d.anim_on;
+  $("demo-anim-off").disabled = !d.active || (!d.anim_on && d.anim_amp <= 0);
+  const noHoming = canMove ? "" : "Сначала хоуминг: пока нули не найдены, нога не поедет";
+  $("demo-stance").title = noHoming;
+  $("demo-anim-on").title = noHoming || "Лапа пойдёт по рёбрам: вперёд-низ, назад-низ, верх";
+
+  pill($("demo-state"), !d.active ? "выкл" : d.anim_on ? "анимация идёт" : d.anim_amp > 0 ? "гашу анимацию" : "стойка по IK", d.active ? "ok" : "");
+  const notes = [d.note];
+  if (d.active && d.clamped) notes.push("Колено упёрлось в ограничитель: верхняя точка треугольника не достаётся, угол срезан. Опусти нижнее ребро или уменьши высоту.");
+  if (d.active && d.ik_err > 0.003) notes.push(`Лапа не достаёт до цели на ${f(d.ik_err * 1000, 0)} мм.`);
+  demoMsg("demo-note", notes.filter(Boolean).join(" "), d.active && (d.clamped || d.ik_err > 0.003) ? "warn" : "");
+
+  const p = d.params;
+  const legs = s.legs || s.legs_cmd;
+  const leg = $("demo-tri-leg").value;
+  let info = `Треугольник ${LEG_RU[leg]}: основание ${f(p.anim_x * 200, 1)} см · высота ${f(p.anim_h * 100, 1)} см · нижнее ребро ${f(p.height * 100, 1)} см ниже плеча`;
+  if (legs && legs[leg]) {
+    const g = legGeometry(legs[leg]);
+    info += `<br>Сейчас лапа ${f(g.h * 100, 1)} см ниже плеча, угол в колене ${f(g.kneeDeg, 0)}°`;
+  }
+  $("demo-tri-info").innerHTML = info;
+  renderEars(s);
+}
+
+// ---------- отрисовка состояния ----------
+function pill(el, text, cls) { el.textContent = text; el.className = "pill " + (cls || ""); }
+function kv(pairs) { return pairs.map(([k, v]) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`).join(""); }
+
+let offsetTouch = 0;
+function showOffsetNote(text, cls) {
+  const el = $("off-note");
+  el.textContent = text || "";
+  el.className = "msg" + (cls ? " " + cls : "");
+  el.hidden = !text;
+}
+async function sendOffset(body) {
+  offsetTouch = Date.now();
+  try {
+    await api("/api/policy_offset", body);
+    showOffsetNote("");
+  } catch (e) {
+    showOffsetNote(e.message, "bad");
+  }
+}
+function renderOffsets(s) {
+  const o = s.policy_offsets || {};
+  const editing = document.activeElement && document.activeElement.classList.contains("off-slider");
+  if (!editing && Date.now() - offsetTouch > 600) {
+    if (o.pitch_offset_deg != null) {
+      $("off-pitch").value = o.pitch_offset_deg;
+      $("off-pitch-v").textContent = Number(o.pitch_offset_deg).toFixed(1) + "°";
+    }
+    if (o.roll_offset_deg != null) {
+      $("off-roll").value = o.roll_offset_deg;
+      $("off-roll-v").textContent = Number(o.roll_offset_deg).toFixed(1) + "°";
+    }
+  }
+  if (Date.now() - offsetTouch > 600) {
+    if (s.policy_offsets_note) showOffsetNote(s.policy_offsets_note, "warn");
+    else if ($("off-note").classList.contains("warn")) showOffsetNote("");
+  }
+  const nose = (deg) => deg == null ? "—" : (Math.abs(deg) < 0.8 ? "ровно" : (deg < 0 ? "выше " : "ниже ") + Math.abs(deg).toFixed(1) + "°");
+  const imuNose = s.imu ? s.imu.pitch : null;
+  // Тот же знак, что у IMU: минус — нос выше. У гравитации сети минус по X и есть поднятый нос.
+  const seen = s.policy_gravity ? Math.atan2(s.policy_gravity[0], -s.policy_gravity[2]) * 180 / Math.PI : null;
+  $("off-readout").innerHTML =
+    `<div class="tile"><span>Датчик, нос</span><b>${nose(imuNose)}</b></div>`
+    + `<div class="tile"><span>Оффсет тангажа</span><b>${o.pitch_offset_deg == null ? "—" : Number(o.pitch_offset_deg).toFixed(1) + "°"}</b></div>`
+    + `<div class="tile"><span>Сеть видит нос</span><b>${seen == null ? "походка выкл" : nose(seen)}</b></div>`;
+}
+for (const [id, key] of [["off-pitch", "pitch_offset_deg"], ["off-roll", "roll_offset_deg"]]) {
+  $(id).addEventListener("input", () => {
+    $(id + "-v").textContent = Number($(id).value).toFixed(1) + "°";
+  });
+  $(id).addEventListener("change", () => sendOffset({ [key]: Number($(id).value) }));
+}
+document.querySelectorAll("[data-pitch]").forEach((b) => {
+  b.addEventListener("click", () => {
+    $("off-pitch").value = b.dataset.pitch;
+    $("off-pitch-v").textContent = Number(b.dataset.pitch).toFixed(1) + "°";
+    sendOffset({ pitch_offset_deg: Number(b.dataset.pitch) });
+  });
+});
+
+function render() {
+  const s = S;
+  renderOffsets(s);
+  pill($("svc"), "robot.service: " + s.service, s.service === "active" ? "ok" : "bad");
+  const cm = s.controllers_age === null || s.controllers_age > 3;
+  pill($("gait"), cm ? "контроллеры не отвечают" : s.gait ? "походка ВКЛ" : s.tg ? "ГЕНЕРАТОР" : s.demo.active ? "ДЕМО-СТОЙКА" : s.stand ? "СТОЙКА" : "походка выкл", cm ? "bad" : s.gait || s.stand || s.tg || s.demo.active ? "ok" : "warn");
+  pill($("nn-state"), cm ? "контроллеры не отвечают" : s.gait ? "нейросеть ведёт" : "нейросеть выкл", cm ? "bad" : s.gait ? "ok" : "");
+  renderDemo(s);
+
+  if (!tgInit) {
+    for (const [id] of [...TG_SLIDERS, ...TG_IMU_SLIDERS]) { $("tg-" + id).value = s.tg_params[id]; $("tg-" + id + "-v").textContent = s.tg_params[id]; }
+    tgInit = true;
+  }
+  pill($("tg-state"), s.tg ? `${s.tg.stage} · амплитуда ${Math.round(s.tg.amp * 100)}%` : "выкл", s.tg ? "ok" : "");
+  $("tg-imu").textContent = !s.tg ? "" :
+    (s.tg.yaw_err !== null && s.tg.yaw_err !== undefined ? `курс от старта: ${s.tg.yaw_err > 0 ? "влево" : "вправо"} ${f(Math.abs(s.tg.yaw_err), 1)}° · ` : "")
+    + (s.tg.att ? `IMU (сглаж.): крен ${f(s.tg.att[0], 1)}° тангаж ${f(s.tg.att[1], 1)}° · ` : "")
+    + `поправки высоты, см: ПП ${f(s.tg.dz.front_r * 100, 1)} ПЛ ${f(s.tg.dz.front_l * 100, 1)} ЗП ${f(s.tg.dz.back_r * 100, 1)} ЗЛ ${f(s.tg.dz.back_l * 100, 1)}`
+    + (s.tg.ik_err > 0.003 ? ` · ЛАПА НЕ ДОСТАЁТ на ${f(s.tg.ik_err * 1000, 0)} мм` : "");
+  $("tg-note").textContent = s.tg_note;
+  pill($("rec-state"), s.record.active ? `● пишу ${f(s.record.t, 0)} с` : "не пишу", s.record.active ? "bad" : "");
+  $("rec-note-out").textContent = s.record.note;
+  pill($("src"), "команды: " + s.mux_source, s.mux_source === "/llm_cmd_vel" ? "ok" : "");
+
+  if (!limitsInit) {
+    for (const id of ["vmax", "vymax", "wmax", "scale"]) { $(id).value = s.limits[id]; $(id + "-v").textContent = s.limits[id]; }
+    limitsInit = true;
+  }
+
+  const imu = s.imu;
+  const imuMsg = [];
+  if (!imu) imuMsg.push(["bad", "нет сообщений /imu_sensor_broadcaster/imu"]);
+  else {
+    if (imu.age > 0.5) imuMsg.push(["bad", `датчик наклона молчит ${f(imu.age, 1)} с`]);
+    const gmax = Math.max(...s.imu_hist.map((h) => Math.max(Math.abs(h[4]), Math.abs(h[5]), Math.abs(h[6]))), 0);
+    if (s.imu_hist.length > 50 && gmax === 0) imuMsg.push(["warn", "гироскоп 12 с ровно 0 — либо робот идеально неподвижен, либо гиро не читается. Покачай робота."]);
+    $("imu-kv").innerHTML = kv([
+      ["roll (крен)", f(imu.roll, 1) + "°"], ["pitch (тангаж)", f(imu.pitch, 1) + "°"],
+      ["yaw (курс)", f(imu.yaw, 1) + "°"], ["частота", f(imu.rate, 0) + " Гц"],
+      ["гиро x", f(imu.gyro[0], 3) + " рад/с"], ["гиро y", f(imu.gyro[1], 3) + " рад/с"],
+      ["гиро z", f(imu.gyro[2], 3) + " рад/с"], ["задержка IMU", s.latency.imu === null ? "—" : f(s.latency.imu * 1000, 1) + " мс"],
+      ["гравитация в корпусе", `${f(imu.gravity[0])}, ${f(imu.gravity[1])}, ${f(imu.gravity[2])}`],
+      ["её же видит политика", s.policy_gravity ? s.policy_gravity.map((v) => f(v)).join(", ") : "походка выкл"],
+    ]);
+  }
+  $("imu-msg").innerHTML = imuMsg.map(([c, t]) => `<div class="msg ${c}">${t}</div>`).join("");
+
+  chart("chart-att", s.imu_hist, [[1, "#ff7a59", "roll"], [2, "#4cc9f0", "pitch"]], 30, "°");
+  chart("chart-gyro", s.imu_hist, [[4, "#ff7a59", "гиро x"], [5, "#4cc9f0", "гиро y"], [6, "#ffd166", "гиро z"]], 3, "рад/с");
+
+  if (imu) {
+    const [gx, gy] = imu.gravity;
+    const deg = (v) => Math.round(Math.asin(Math.max(-1, Math.min(1, Math.abs(v)))) * 180 / Math.PI);
+    const parts = [];
+    if (Math.abs(gx) > 0.09) parts.push(gx > 0 ? `нос ниже на ${deg(gx)}°` : `нос выше на ${deg(gx)}°`);
+    if (Math.abs(gy) > 0.09) parts.push(gy < 0 ? `ПРАВЫЙ бок ниже на ${deg(gy)}°` : `ЛЕВЫЙ бок ниже на ${deg(gy)}°`);
+    $("tilt").textContent = "IMU считает: " + (parts.length ? parts.join(", ") : "стою ровно (±5°)");
+  }
+  if (s.legs) {
+    const gz = s.ground_z != null ? s.ground_z : -0.14;
+    const clear = {};
+    for (const [leg, l] of Object.entries(s.legs)) clear[leg] = (l.foot[2] - gz) * 100;
+    const cmdClear = {};
+    if (s.legs_cmd) {
+      for (const [leg, l] of Object.entries(s.legs_cmd)) cmdClear[leg] = (l.foot[2] - gz) * 100;
+    }
+    const rearFact = Math.min(clear.back_r, clear.back_l);
+    const rearCmd = s.legs_cmd ? Math.min(cmdClear.back_r, cmdClear.back_l) : null;
+    let verdict = "";
+    if (rearFact < 0.5) verdict = "задние лапы на полу модели (волокутся) — смотри яркие ноги, не призрак";
+    else if (rearCmd !== null && rearCmd > rearFact + 1.5) verdict = `команда поднимает зад на ${f(rearCmd, 1)} см, факт только ${f(rearFact, 1)} см — моторы не догоняют`;
+    else verdict = "клиренс задних лап ок относительно пола модели";
+    $("feet").innerHTML = `Над полом модели, см — факт: ПП ${f(clear.front_r, 1)} · ПЛ ${f(clear.front_l, 1)} · ЗП ${f(clear.back_r, 1)} · ЗЛ ${f(clear.back_l, 1)}`
+      + (s.legs_cmd ? `<br>команда: ПП ${f(cmdClear.front_r, 1)} · ПЛ ${f(cmdClear.front_l, 1)} · ЗП ${f(cmdClear.back_r, 1)} · ЗЛ ${f(cmdClear.back_l, 1)}` : "")
+      + `<br>${verdict}`;
+  }
+
+  const homingByName = {};
+  for (const r of s.homing.rows) homingByName[r.name] = r;
+  $("joints").innerHTML = s.joints.map((j, i) => {
+    const err = j.cmd !== null && j.pos !== null ? j.cmd - j.pos : null;
+    const X = (v) => `${50 + (Math.max(-Math.PI, Math.min(Math.PI, v)) / Math.PI) * 50}%`;
+    const marks = [`<i style="left:${X(j.def)};background:#8a93a3"></i>`];
+    if (j.cmd !== null) marks.push(`<i style="left:${X(j.cmd)};background:var(--accent)"></i>`);
+    if (j.pos !== null) marks.push(`<i style="left:${X(j.pos)};background:var(--ok)"></i>`);
+    const hr = homingByName[j.name];
+    const hcls = !hr ? "" : hr.hold === "ДЕРЖИТ" ? "color:var(--ok)" : "color:var(--bad)";
+    const errCls = err !== null && Math.abs(err) > 0.3 ? "color:var(--bad)" : err !== null && Math.abs(err) > 0.12 ? "color:var(--warn)" : "";
+    return `<tr><td>${JOINT_RU(j.name)} <span style="color:#6b7482">${j.name}</span></td>`
+      + `<td class="num">${f(j.pos, 3)}</td><td class="num">${f(j.cmd, 3)}</td><td class="num" style="${errCls}">${f(err, 3)}</td>`
+      + `<td class="num">${f(j.vel, 2)}</td>`
+      + `<td class="num" style="${j.eff !== null && Math.abs(j.eff) > 3.5 ? "color:var(--bad)" : j.eff !== null && Math.abs(j.eff) > 2.5 ? "color:var(--warn)" : ""}">${f(j.eff, 2)}</td>`
+      + `<td class="num" style="${j.kp !== null && j.kp > 12.01 ? "color:var(--warn)" : ""}">${j.kp === null ? "—" : f(j.kp, 1)}</td>`
+      + `<td><div class="bar">${marks.join("")}</div></td>`
+      + `<td style="${hcls}">${hr ? hr.moved + " " + hr.hold : "—"}</td>`
+      + `<td class="mono"><button data-trim="${i}" data-d="-0.0349" ${s.stand ? "" : "disabled"}>−2°</button> `
+      + `<span style="${Math.abs(j.trim) > 1e-6 ? "color:var(--warn)" : ""}">${f(j.trim * 180 / Math.PI, 0)}°</span> `
+      + `<button data-trim="${i}" data-d="0.0349" ${s.stand ? "" : "disabled"}>+2°</button></td></tr>`;
+  }).join("");
+  $("trim-note").textContent = s.trim_note || (s.stand ? "" : "Поправки доступны в режиме «Стойка».");
+
+  $("homing-when").textContent = s.homing.when ? "начало хоуминга: " + s.homing.when.replace("T", " ") : "";
+  const released = s.homing.rows.filter((r) => r.hold !== "ДЕРЖИТ");
+  let hn = released.length
+    ? `<div class="msg bad">Без момента после хоуминга: ${released.map((r) => JOINT_RU(r.name)).join(", ")}. Эти суставы висят, походка с ними не заработает.</div>`
+    : s.homing.rows.length ? `<div class="msg">Все ${s.homing.rows.length} суставов держат момент.</div>` : "";
+  hn += s.homing.notes.map((n) => `<div class="msg warn mono">${n}</div>`).join("");
+  $("homing-notes").innerHTML = hn;
+
+  const co = s.cmd_out;
+  $("cmd-kv").innerHTML = kv([
+    ["в /cmd_vel сейчас", co ? `vx ${f(co[0])} vy ${f(co[1])} wz ${f(co[2])}` : "тишина"],
+    ["ручное", s.manual ? "да" : "нет"],
+    ["задержка политики", s.latency.policy === null ? "—" : f(s.latency.policy * 1000, 1) + " мс"],
+    ["шагов в маршруте", String(s.mission.length)],
+  ]);
+  if (s.mission_note) { $("mission").textContent = s.mission_note; $("mission").className = "msg" + (s.mission_note.startsWith("АВАР") ? " bad" : ""); }
+
+  $("log").innerHTML = s.log.slice().reverse().map((l) => `<div class="lvl-${l.level}">${l.t} [${l.name}] ${l.msg.replace(/</g, "&lt;")}</div>`).join("") || "<div>пусто</div>";
+
+  drawPose();
+  drawMap();
+}
+
+async function poll() {
+  let fresh = null;
+  try {
+    fresh = await api("/api/state");
+  } catch (e) {
+    pill($("conn"), "нет связи с роботом", "bad");
+  }
+  if (fresh) {
+    S = fresh;
+    lastOk = Date.now();
+    pill($("conn"), "связь есть", "ok");
+    render();
+  }
+  setTimeout(poll, 100);
+}
+poll();
+window.addEventListener("resize", () => { if (S) render(); });
+</script>
+</body>
+</html>

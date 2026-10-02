@@ -50,7 +50,7 @@ class IMUManager {
                                                                                   int delay_ms);
 
   void poll_imu();
-
+  void reopen();
 
   void imu_read_thread_fn();
 
@@ -67,4 +67,5 @@ class IMUManager {
 
   // Imu reader
   std::unique_ptr<BNO055> imu_ = nullptr;
+  uint32_t micros_between_reports_ = 10000;
 };

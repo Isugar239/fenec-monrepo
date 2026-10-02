@@ -1,0 +1,20 @@
+[submodule "ros2_ws/src/common/camera_ros"]
+	path = ros2_ws/src/common/camera_ros
+	url = https://github.com/christianrauch/camera_ros.git
+[submodule "ros2_ws/src/common/foxglove-sdk"]
+	path = ros2_ws/src/common/foxglove-sdk
+	url = https://github.com/foxglove/foxglove-sdk.git
+[submodule "ros2_ws/src/common/rosx_introspection"]
+	path = ros2_ws/src/common/rosx_introspection
+	url = https://github.com/facontidavide/rosx_introspection.git
+[submodule "ros2_ws/src/common/topic_tools"]
+	path = ros2_ws/src/common/topic_tools
+	url = https://github.com/ros-tooling/topic_tools.git
+	branch = jazzy
+[submodule "ros2_ws/src/common/vision_msgs"]
+	path = ros2_ws/src/common/vision_msgs
+	url = https://github.com/ros-perception/vision_msgs.git
+	branch = ros2
+[submodule "ros2_ws/src/usb_cam"]
+	path = ros2_ws/src/usb_cam
+	url = https://github.com/ros-drivers/usb_cam.git

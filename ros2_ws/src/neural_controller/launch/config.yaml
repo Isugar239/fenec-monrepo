@@ -36,7 +36,10 @@ neural_controller:
   ros__parameters:
     repeat_action: 10
 
-    gain_multiplier: 1.0
+    # Policy JSON kp is 5. At that gain the legs sagged about 15 deg under
+    # body weight (recording 20261001_165037_ii). 2.0 makes kp 10 and kd 0.5,
+    # under the motor limits kp_max 20 and kd_max 1.
+    gain_multiplier: 2.0
     estop_kd: 0.1
 
     joint_names:
@@ -83,13 +86,19 @@ neural_controller:
 
     max_body_angle: 1.5
 
+    # Positive pitch: the policy sees the nose higher and lowers it.
+    # Midpoint of the 15–20 deg pitch bias observed on the robot.
+    roll_offset_deg: 0.0
+    pitch_offset_deg: 17.5
+
     model_path: "$(find-pkg-share neural_controller)/launch/policy_latest.json"
 
 neural_controller_three_legged:
   ros__parameters:
     repeat_action: 10
 
-    gain_multiplier: 1.0
+    # Same kp scale as neural_controller. Policy JSON kp is 5; 2.0 makes kp 10.
+    gain_multiplier: 2.0
     estop_kd: 0.3
 
     joint_names:
@@ -135,6 +144,9 @@ neural_controller_three_legged:
       ]
 
     max_body_angle: 1.5
+
+    roll_offset_deg: 0.0
+    pitch_offset_deg: 17.5
 
     model_path: "$(find-pkg-share neural_controller)/launch/policy_rich-donkey-233_max_reward_19.16.json"
 

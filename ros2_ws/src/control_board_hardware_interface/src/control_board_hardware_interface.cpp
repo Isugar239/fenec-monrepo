@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -122,6 +123,14 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_init(
     hw_actuator_homing_velocities_.push_back(std::stod(joint.parameters.at("homing_velocity")));
     hw_actuator_homing_kps_.push_back(std::stod(joint.parameters.at("homing_kp")));
     hw_actuator_homing_kds_.push_back(std::stod(joint.parameters.at("homing_kd")));
+    const auto hold_kp = joint.parameters.find("hold_kp");
+    const auto hold_kd = joint.parameters.find("hold_kd");
+    hw_actuator_hold_kps_.push_back(hold_kp == joint.parameters.end()
+                                        ? hw_actuator_homing_kps_.back()
+                                        : std::stod(hold_kp->second));
+    hw_actuator_hold_kds_.push_back(hold_kd == joint.parameters.end()
+                                        ? hw_actuator_homing_kds_.back()
+                                        : std::stod(hold_kd->second));
     hw_actuator_homed_positions_.push_back(std::stod(joint.parameters.at("homed_position")));
     hw_actuator_post_homing_positions_.push_back(
         std::stod(joint.parameters.at("post_homing_position")));
@@ -154,6 +163,20 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_init(
     // TODO: make micros_between_reports a parameter
     imu_manager_.begin(/*micros_between_reports=*/10000);
   }
+
+  if (info_.hardware_parameters.count("imu_gyro_filter_alpha")) {
+    imu_gyro_filter_alpha_ =
+        std::stod(info_.hardware_parameters.at("imu_gyro_filter_alpha"));
+  }
+  if (!std::isfinite(imu_gyro_filter_alpha_) || imu_gyro_filter_alpha_ <= 0.0 ||
+      imu_gyro_filter_alpha_ > 1.0) {
+    RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                 "imu_gyro_filter_alpha must be in (0, 1], got %.3f",
+                 imu_gyro_filter_alpha_);
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+              "IMU gyro low-pass filter enabled: alpha=%.2f", imu_gyro_filter_alpha_);
 
   // Set up SPI
   init_spi();
@@ -226,6 +249,7 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_configure(
     hw_command_kps_[i] = 0.0;
     hw_command_kds_[i] = 0.0;
   }
+  imu_gyro_filter_initialized_ = false;
 
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Successfully configured!");
 
@@ -280,6 +304,8 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_activate(
 
   // Homing (skipped for inactive channels and when torque is disabled)
   do_homing();
+  start_revive_listener();
+  publish_homing_status(homing_seq_ > 0 ? "done" : "none", "rear_first", -1, 0.0);
 
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Successfully activated!");
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -310,6 +336,7 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_error(
 
 hardware_interface::CallbackReturn ControlBoardHardwareInterface::on_deactivate(
     const rclcpp_lifecycle::State & /*previous_state*/) {
+  stop_revive_listener();
   deactivate_motors();
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Successfully deactivated!");
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -325,8 +352,20 @@ bool ControlBoardHardwareInterface::hw_states_contains_nan() {
 hardware_interface::return_type ControlBoardHardwareInterface::read(
     [[maybe_unused]] const rclcpp::Time &time, [[maybe_unused]] const rclcpp::Duration &period) {
   // Write to and read from the actuators
+  if (rehome_pending_.exchange(false)) {
+    // Блокирует цикл контроллеров на время хоуминга, как и при запуске сервиса.
+    rehome(rehome_mode_.load(), rehome_delay_s_.load());
+  }
   apply_spi_flags();
   spi_driver_run();
+  const int revive_left = revive_exit_frames_.load();
+  if (revive_left > 0) {
+    revive_exit_frames_.store(revive_left - 1);
+    if (revive_left == 1) {
+      RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                  "Моторы: Enter отправлен, хоуминг не запускался");
+    }
+  }
   copy_actuator_states();
 
   // Diagnostics: detect frozen joint states
@@ -408,35 +447,20 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
     //             imu_packet_timestamp_micros_, imu_measurement_timestamp_micros_,
     //             imu_time_since_measurement_micros_, imu_time_since_measurement_seconds_);
 
-    const float quat_norm = imu_output.quat.norm();
-    const float gyro_norm = imu_output.gyro.norm();
-    const bool imu_sample_valid =
-        quat_norm > 0.9f && quat_norm < 1.1f && gyro_norm < 20.0f &&
-        imu_time_since_measurement_seconds_ < 1.0;
-
-    if (!imu_sample_valid) {
-      // TEMPORARY: BNO055 I2C returns garbage; assume upright until IMU is fixed.
-      corrected_quat = tf2::Quaternion::getIdentity();
-      angular_velocity = tf2::Vector3(0, 0, 0);
-      linear_acceleration = tf2::Vector3(0, 0, -9.81);
-      imu_time_since_measurement_seconds_ = 0.0;
-    } else {
-      // Represent IMU orientation as quaternion
-      tf2::Quaternion imu_quat(imu_output.quat.x(), imu_output.quat.y(), imu_output.quat.z(),
-                               imu_output.quat.w());
-
-      // Applying the offset to the IMU quaternion
-      corrected_quat = imu_quat * imu_manager_.offset_quaternion.inverse();
+    // Every sample is published. A fall used to fail quat-norm, gyro or age
+    // checks and the driver then froze the last pose, so the IMU looked dead.
+    tf2::Quaternion imu_quat(imu_output.quat.x(), imu_output.quat.y(), imu_output.quat.z(),
+                             imu_output.quat.w());
+    corrected_quat = imu_quat * imu_manager_.offset_quaternion.inverse();
+    if (corrected_quat.length2() > 1e-12) {
       corrected_quat.normalize();
-
-      // Rotating the angular velocity
-      tf2::Vector3 imu_ang_vel(imu_output.gyro.x(), imu_output.gyro.y(), imu_output.gyro.z());
-      angular_velocity = imu_manager_.offset_rotation_matrix * imu_ang_vel;
-
-      // Rotating the linear acceleration
-      tf2::Vector3 imu_acc(imu_output.acc.x(), imu_output.acc.y(), imu_output.acc.z());
-      linear_acceleration = imu_manager_.offset_rotation_matrix * imu_acc;
     }
+
+    tf2::Vector3 imu_ang_vel(imu_output.gyro.x(), imu_output.gyro.y(), imu_output.gyro.z());
+    angular_velocity = imu_manager_.offset_rotation_matrix * imu_ang_vel;
+
+    tf2::Vector3 imu_acc(imu_output.acc.x(), imu_output.acc.y(), imu_output.acc.z());
+    linear_acceleration = imu_manager_.offset_rotation_matrix * imu_acc;
   }
 
   // Updating the state interfaces with corrected values
@@ -445,9 +469,21 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
   hw_state_imu_orientation_[2] = corrected_quat.z();
   hw_state_imu_orientation_[3] = corrected_quat.w();
 
-  hw_state_imu_angular_velocity_[0] = angular_velocity.x();
-  hw_state_imu_angular_velocity_[1] = angular_velocity.y();
-  hw_state_imu_angular_velocity_[2] = angular_velocity.z();
+  const std::array<double, 3> raw_angular_velocity = {
+      angular_velocity.x(), angular_velocity.y(), angular_velocity.z()};
+  if (!imu_gyro_filter_initialized_) {
+    // Start from the first sample so enabling the filter never creates a
+    // startup transient. Only gyro is filtered; quaternion stays unfiltered.
+    filtered_imu_angular_velocity_ = raw_angular_velocity;
+    imu_gyro_filter_initialized_ = true;
+  } else {
+    for (auto i = 0u; i < raw_angular_velocity.size(); ++i) {
+      filtered_imu_angular_velocity_[i] =
+          imu_gyro_filter_alpha_ * raw_angular_velocity[i] +
+          (1.0 - imu_gyro_filter_alpha_) * filtered_imu_angular_velocity_[i];
+    }
+  }
+  hw_state_imu_angular_velocity_ = filtered_imu_angular_velocity_;
 
   hw_state_imu_linear_acceleration_[0] = linear_acceleration.x();
   hw_state_imu_linear_acceleration_[1] = linear_acceleration.y();
@@ -481,7 +517,50 @@ hardware_interface::return_type ControlBoardHardwareInterface::write(
   return hardware_interface::return_type::OK;
 }
 
-void ControlBoardHardwareInterface::do_homing() {
+void ControlBoardHardwareInterface::rehome(int mode, double delay_s) {
+  if (!torque_enable_) {
+    RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "Повторный хоуминг не запущен: момент отключён (torque_enable=false)");
+    return;
+  }
+  // Ноль прошлого хоуминга больше не годится: суставы могли сместиться, а хоуминг
+  // работает в сырых координатах энкодера. Отправленный в SPI кадр остаётся прежним.
+  for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (!is_joint_active(i)) {
+      continue;
+    }
+    hw_actuator_is_homed_[i] = false;
+    hw_actuator_zero_positions_[i] = 0.0;
+  }
+  copy_actuator_states();
+  do_homing(mode, delay_s);
+}
+
+void ControlBoardHardwareInterface::publish_homing_status(const std::string &state,
+                                                          const std::string &mode, int stage,
+                                                          double delay_s) {
+  if (!homing_status_pub_) {
+    return;
+  }
+  std::ostringstream ss;
+  ss << "{\"seq\":" << homing_seq_ << ",\"state\":\"" << state << "\",\"mode\":\"" << mode
+     << "\",\"stage\":" << stage << ",\"delay\":" << delay_s << ",\"skipped\":[";
+  bool first = true;
+  for (auto i = 0u; i < info_.joints.size(); i++) {
+    if (!is_joint_active(i) || i >= hw_actuator_homing_skipped_.size() ||
+        !hw_actuator_homing_skipped_[i]) {
+      continue;
+    }
+    ss << (first ? "" : ",") << "\"" << info_.joints[i].name << "\"";
+    first = false;
+  }
+  ss << "]}";
+  std_msgs::msg::String msg;
+  msg.data = ss.str();
+  homing_status_pub_->publish(msg);
+}
+
+void ControlBoardHardwareInterface::do_homing(int mode, double delay_s) {
   bool any_active = false;
   for (auto i = 0u; i < hw_state_positions_.size(); i++) {
     if (is_joint_active(i)) {
@@ -503,7 +582,32 @@ void ControlBoardHardwareInterface::do_homing() {
     return;
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Homing actuators...");
+  const bool all_at_once = (mode == 1);
+  const std::string mode_name = all_at_once ? "all" : "rear_first";
+  RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+              "Homing actuators... (режим %s, пауза между задними и передними %.1f с)",
+              mode_name.c_str(), all_at_once ? 0.0 : delay_s);
+  homing_seq_++;
+
+  // Стадии 0-2 — задние ноги, 3-5 — передние; внутри ноги колено → отведение → бедро.
+  // «Все сразу» сворачивает передние на те же три стадии.
+  std::vector<int> stages = hw_actuator_homing_stages_;
+  if (all_at_once) {
+    for (auto &s : stages) {
+      s %= 3;
+    }
+  }
+  bool rear_stage_active = false;
+  for (auto i = 0u; i < stages.size(); i++) {
+    if (is_joint_active(i) && stages[i] < 3) {
+      rear_stage_active = true;
+    }
+  }
+  const bool use_pause = !all_at_once && delay_s > 0.0 && rear_stage_active;
+  bool pause_started = false;
+  bool pause_done = false;
+  std::chrono::steady_clock::time_point pause_until;
+  int last_published_stage = -2;
 
   int dt_ms = 10;
 
@@ -536,8 +640,17 @@ void ControlBoardHardwareInterface::do_homing() {
   std::vector<double> filtered_torques;
   filtered_torques.resize(hw_state_positions_.size(), 0.0);
   std::vector<double> homing_start_pos = hw_state_positions_;
-  std::vector<uint8_t> homing_skipped(hw_state_positions_.size(), 0);
+  hw_actuator_homing_skipped_.assign(hw_state_positions_.size(), 0);
+  std::vector<uint8_t> &homing_skipped = hw_actuator_homing_skipped_;
+  publish_homing_status("running", mode_name, -1, delay_s);
+  // Размах fb за хоуминг: сустав, стартовавший в упоре, после отъезда наберёт ход,
+  // а зажатый или с мёртвым энкодером — нет.
+  std::vector<double> travel_min = hw_state_positions_;
+  std::vector<double> travel_max = hw_state_positions_;
+  std::vector<uint8_t> backed_off(hw_state_positions_.size(), 0);
+  std::vector<int> backoff_ticks(hw_state_positions_.size(), 0);
   constexpr double kMinHomingTravel = 0.10;
+  constexpr double kBackoff = 0.30;
   const auto homing_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
   double alpha = 0.5;
 
@@ -563,12 +676,35 @@ void ControlBoardHardwareInterface::do_homing() {
     }
     // Set the homing stage to that of the lowest-stage unhomed actuator
     int homing_stage = 999;
-    for (auto i = 0u; i < hw_actuator_homing_stages_.size(); i++) {
+    for (auto i = 0u; i < stages.size(); i++) {
       if (!is_joint_active(i)) {
         continue;
       }
-      if (!hw_actuator_is_homed_[i] && (hw_actuator_homing_stages_[i] < homing_stage)) {
-        homing_stage = hw_actuator_homing_stages_[i];
+      if (!hw_actuator_is_homed_[i] && (stages[i] < homing_stage)) {
+        homing_stage = stages[i];
+      }
+    }
+    // Пауза, когда задние ноги готовы, а передние ещё не начинали: задние держат упор.
+    bool paused = false;
+    if (use_pause && !pause_done && homing_stage >= 3 && homing_stage != 999) {
+      const auto now = std::chrono::steady_clock::now();
+      if (!pause_started) {
+        pause_started = true;
+        pause_until = now + std::chrono::milliseconds(static_cast<int>(delay_s * 1000.0));
+        RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                    "Задние ноги в нуле, пауза %.1f с перед передними", delay_s);
+        publish_homing_status("running", mode_name, homing_stage, delay_s);
+      }
+      if (now < pause_until) {
+        paused = true;
+      } else {
+        pause_done = true;
+      }
+    }
+    if (homing_stage != last_published_stage && !paused) {
+      last_published_stage = homing_stage;
+      if (homing_stage != 999) {
+        publish_homing_status("running", mode_name, homing_stage, delay_s);
       }
     }
     // Check if all actuators are homed
@@ -577,7 +713,7 @@ void ControlBoardHardwareInterface::do_homing() {
       if (!is_joint_active(i)) {
         continue;
       }
-      if (homing_stage < hw_actuator_homing_stages_[i]) {
+      if (homing_stage < stages[i] || (paused && !hw_actuator_is_homed_[i])) {
         hw_command_positions_[i] = hw_state_positions_[i];
         hw_command_velocities_[i] = 0.0;
         hw_command_kps_[i] = 0.0;
@@ -593,13 +729,33 @@ void ControlBoardHardwareInterface::do_homing() {
         hw_command_kds_[i] = hw_actuator_homing_kds_[i];
       }
       if (!hw_actuator_is_homed_[i]) {
+        travel_min[i] = std::min(travel_min[i], hw_state_positions_[i]);
+        travel_max[i] = std::max(travel_max[i], hw_state_positions_[i]);
+        if (backoff_ticks[i] > 0) {
+          backoff_ticks[i]--;
+          all_homed = false;
+          continue;
+        }
         filtered_torques[i] =
             (1.0 - alpha) * filtered_torques[i] +
             alpha * ((hw_command_positions_[i] - hw_state_positions_[i]) * hw_command_kps_[i] +
                      (hw_command_velocities_[i] - hw_state_velocities_[i]) * hw_command_kds_[i]);
         if (std::abs(filtered_torques[i]) >= hw_actuator_homing_torque_thresholds_[i]) {
-          const double traveled = std::abs(hw_state_positions_[i] - homing_start_pos[i]);
-          if (traveled < kMinHomingTravel) {
+          const double traveled = travel_max[i] - travel_min[i];
+          const bool encoder_alive = std::abs(homing_start_pos[i]) > 1e-3;
+          if (traveled < kMinHomingTravel && encoder_alive && !backed_off[i]) {
+            backed_off[i] = 1;
+            backoff_ticks[i] = 500 / dt_ms;
+            filtered_torques[i] = 0.0;
+            const double dir = hw_actuator_homing_velocities_[i] > 0.0 ? 1.0 : -1.0;
+            hw_command_positions_[i] = hw_state_positions_[i] - dir * kBackoff;
+            hw_command_velocities_[i] = 0.0;
+            all_homed = false;
+            RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                        "Actuator %d (%s) стартовал в упоре (Δ=%.4f): отъезжаю на %.2f рад и "
+                        "захожу снова",
+                        i, info_.joints[i].name.c_str(), traveled, kBackoff);
+          } else if (traveled < kMinHomingTravel) {
             homing_skipped[i] = 1;
             hw_actuator_is_homed_[i] = true;
             hw_command_kps_[i] = 0.0;
@@ -665,6 +821,13 @@ void ControlBoardHardwareInterface::do_homing() {
     // Sleep for dt
     std::this_thread::sleep_for(std::chrono::milliseconds(dt_ms));
   }
+  for (auto i = 0u; i < hw_state_positions_.size(); i++) {
+    if (!is_joint_active(i) || homing_skipped[i]) {
+      continue;
+    }
+    hw_command_kps_[i] = hw_actuator_hold_kps_[i];
+    hw_command_kds_[i] = hw_actuator_hold_kds_[i];
+  }
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"),
               "HOMING_RESULT name CAN id start end delta status hold");
   for (auto i = 0u; i < hw_state_positions_.size(); i++) {
@@ -681,8 +844,15 @@ void ControlBoardHardwareInterface::do_homing() {
                 info_.joints[i].name.c_str(), hw_actuator_can_channels_[i],
                 hw_actuator_can_ids_[i], homing_start_pos[i], hw_state_positions_[i], delta,
                 status, hold);
+    if (homing_skipped[i]) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "HOMING_SKIPPED %s: ноль не найден, момента не будет до перезапуска. "
+                   "Походка на этом суставе работать не будет.",
+                   info_.joints[i].name.c_str());
+    }
   }
   RCLCPP_INFO(rclcpp::get_logger("ControlBoardHardwareInterface"), "Finished homing!");
+  publish_homing_status("done", mode_name, -1, delay_s);
 }
 
 void ControlBoardHardwareInterface::copy_actuator_commands(bool use_position_limits) {
@@ -731,7 +901,8 @@ void ControlBoardHardwareInterface::copy_actuator_commands(bool use_position_lim
     double cmd_kp = std::clamp(hw_command_kps_[i], 0.0, kp_limit);
     double cmd_kd = std::clamp(hw_command_kds_[i], 0.0, hw_actuator_kd_maxs_[i]);
 
-    if (!torque_enable_) {
+    const bool no_zero = i < hw_actuator_homing_skipped_.size() && hw_actuator_homing_skipped_[i];
+    if (!torque_enable_ || no_zero) {
       cmd_kp = 0.0;
       cmd_kd = 0.0;
       cmd_eff = 0.0;
@@ -845,29 +1016,17 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::apply_motor_ma
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  const YAML::Node joints = root["joints"];
-  std::set<std::string> urdf_names;
-  for (const auto &joint : info_.joints) {
-    urdf_names.insert(joint.name);
-  }
-  if (joints.size() != urdf_names.size()) {
-    RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
-                 "В motor map %zu суставов, в URDF %zu", joints.size(), urdf_names.size());
-    return hardware_interface::CallbackReturn::ERROR;
-  }
-  for (auto it = joints.begin(); it != joints.end(); ++it) {
-    const std::string name = it->first.as<std::string>();
-    if (!urdf_names.count(name)) {
-      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
-                   "В motor map неизвестный сустав %s", name.c_str());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-  }
+  const bool swap_front_back =
+      root["swap_front_back"] ? root["swap_front_back"].as<bool>() : false;
+  const bool swap_left_right =
+      root["swap_left_right"] ? root["swap_left_right"].as<bool>() : false;
 
-  std::set<std::pair<int, int>> used;
-  for (size_t i = 0; i < info_.joints.size(); ++i) {
-    const std::string &name = info_.joints[i].name;
-    const YAML::Node entry = joints[name];
+  // Имя сустава → (can_channel, can_id). Swap меняет адреса целых ног.
+  std::map<std::string, std::pair<int, int>> assignments;
+  const YAML::Node joints_yaml = root["joints"];
+  for (auto it = joints_yaml.begin(); it != joints_yaml.end(); ++it) {
+    const std::string name = it->first.as<std::string>();
+    const YAML::Node entry = it->second;
     if (!entry["can_channel"] || !entry["can_id"]) {
       RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
                    "%s: нужны can_channel и can_id", name.c_str());
@@ -883,6 +1042,63 @@ hardware_interface::CallbackReturn ControlBoardHardwareInterface::apply_motor_ma
                    "%s: can_channel/can_id не число (%s)", name.c_str(), e.what());
       return hardware_interface::CallbackReturn::ERROR;
     }
+    assignments[name] = {channel, can_id};
+  }
+
+  auto exchange = [&assignments](const std::string &a, const std::string &b) {
+    std::swap(assignments.at(a), assignments.at(b));
+  };
+  if (swap_front_back) {
+    for (const char *side : {"l", "r"}) {
+      for (const char *joint : {"1", "2", "3"}) {
+        exchange(std::string("leg_front_") + side + "_" + joint,
+                 std::string("leg_back_") + side + "_" + joint);
+      }
+    }
+  }
+  if (swap_left_right) {
+    for (const char *fb : {"front", "back"}) {
+      for (const char *joint : {"1", "2", "3"}) {
+        exchange(std::string("leg_") + fb + "_l_" + joint,
+                 std::string("leg_") + fb + "_r_" + joint);
+      }
+    }
+  }
+  if (swap_front_back || swap_left_right) {
+    RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                "%smotor_map swap_front_back=%s swap_left_right=%s%s", YELLOW_ANSI,
+                swap_front_back ? "true" : "false", swap_left_right ? "true" : "false",
+                RESET_ANSI);
+  }
+
+  std::set<std::string> urdf_names;
+  for (const auto &joint : info_.joints) {
+    urdf_names.insert(joint.name);
+  }
+  if (assignments.size() != urdf_names.size()) {
+    RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                 "В motor map %zu суставов, в URDF %zu", assignments.size(), urdf_names.size());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  for (const auto &entry : assignments) {
+    if (!urdf_names.count(entry.first)) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "В motor map неизвестный сустав %s", entry.first.c_str());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+  }
+
+  std::set<std::pair<int, int>> used;
+  for (size_t i = 0; i < info_.joints.size(); ++i) {
+    const std::string &name = info_.joints[i].name;
+    const auto found = assignments.find(name);
+    if (found == assignments.end()) {
+      RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                   "%s: нет в motor map", name.c_str());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    const int channel = found->second.first;
+    const int can_id = found->second.second;
     if (channel < 1 || channel > 4 || can_id < 1 || can_id > 3) {
       RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
                    "%s: CAN %d id %d вне диапазона (канал 1..4, id 1..3)", name.c_str(), channel,
@@ -1012,9 +1228,77 @@ void ControlBoardHardwareInterface::parse_partial_hardware_params() {
 }
 
 void ControlBoardHardwareInterface::apply_spi_flags() {
+  const bool exiting = revive_exit_frames_.load() > 0;
   for (int ch = 0; ch < 4; ++ch) {
-    spi_command_->flags[ch] = (channel_enabled_[ch] && torque_enable_) ? 1 : 0;
+    spi_command_->flags[ch] = (!exiting && channel_enabled_[ch] && torque_enable_) ? 1 : 0;
   }
+}
+
+void ControlBoardHardwareInterface::start_revive_listener() {
+  if (revive_node_) {
+    return;
+  }
+  revive_node_ = std::make_shared<rclcpp::Node>("motor_revive");
+  revive_sub_ = revive_node_->create_subscription<std_msgs::msg::Empty>(
+      "/motor_revive", rclcpp::QoS(1), [this](std_msgs::msg::Empty::ConstSharedPtr) {
+        // 8 кадров ~15 мс: хватает, чтобы спина увидела спад флага даже если один SPI-кадр битый.
+        revive_exit_frames_.store(8);
+        RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                    "Оживление: Exit всем моторам, затем Enter. Хоуминга нет, момент пропадёт на долю секунды");
+      });
+  // transient_local: страница пульта, открытая после хоуминга, сразу получает последний статус.
+  homing_status_pub_ = revive_node_->create_publisher<std_msgs::msg::String>(
+      "/motor_homing/status", rclcpp::QoS(1).reliable().transient_local());
+  rehome_sub_ = revive_node_->create_subscription<std_msgs::msg::Float32MultiArray>(
+      "/motor_rehome", rclcpp::QoS(1),
+      [this](std_msgs::msg::Float32MultiArray::ConstSharedPtr msg) {
+        if (msg->data.size() != 2) {
+          RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                       "/motor_rehome: нужно [режим, пауза_с], пришло %zu чисел", msg->data.size());
+          return;
+        }
+        const int mode = static_cast<int>(std::lround(msg->data[0]));
+        const double delay_s = msg->data[1];
+        if ((mode != 0 && mode != 1) || !(delay_s >= 0.0 && delay_s <= 30.0)) {
+          RCLCPP_ERROR(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                       "/motor_rehome: режим %d (0 задние→передние, 1 все сразу), пауза %.1f "
+                       "(0..30 с) — отклонено",
+                       mode, delay_s);
+          return;
+        }
+        if (rehome_pending_.load()) {
+          RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                      "/motor_rehome: прошлый запрос ещё не выполнен, новый отклонён");
+          return;
+        }
+        rehome_mode_.store(mode);
+        rehome_delay_s_.store(delay_s);
+        rehome_pending_.store(true);
+        RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
+                    "Повторный хоуминг по запросу: режим %s, пауза %.1f с. Моторы обмякнут, "
+                    "робот должен висеть на подставке или лежать",
+                    mode == 1 ? "все сразу" : "сначала задние", delay_s);
+      });
+  revive_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  revive_executor_->add_node(revive_node_);
+  revive_thread_ = std::thread([this]() { revive_executor_->spin(); });
+}
+
+void ControlBoardHardwareInterface::stop_revive_listener() {
+  if (revive_executor_) {
+    revive_executor_->cancel();
+  }
+  if (revive_thread_.joinable()) {
+    revive_thread_.join();
+  }
+  if (revive_executor_ && revive_node_) {
+    revive_executor_->remove_node(revive_node_);
+  }
+  revive_sub_.reset();
+  rehome_sub_.reset();
+  homing_status_pub_.reset();
+  revive_executor_.reset();
+  revive_node_.reset();
 }
 
 bool ControlBoardHardwareInterface::is_joint_active(std::size_t joint_index) const {

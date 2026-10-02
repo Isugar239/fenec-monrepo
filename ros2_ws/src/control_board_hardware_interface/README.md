@@ -66,5 +66,9 @@ This repository provides a ros2_control hardware interface for the Pupper v3 con
 ```
 ### Explanation of parameters
 - `imu_mounting_deg.*`: Mounting angles for the IMU relative the the IMU link, measured in degrees
+- `imu_gyro_filter_alpha`: Coefficient of the one-pole low-pass filter for IMU angular velocity
+  in `(0, 1]`. `0.2` suppresses short vibration spikes while retaining body motion. The first
+  sample is copied directly, and the
+  IMU orientation quaternion is never filtered.
 - `can_channel`: Which CANbus channel the actuator is connected to
 - `can_id`: CANbus ID of the actuator (must be 1 or greater)
