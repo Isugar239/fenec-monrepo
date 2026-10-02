@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <eigen3/Eigen/Dense>
+#include <optional>
 
 // Packets can be up to 32k but we don't have that much RAM.
 #define MAX_PACKET_SIZE 128
@@ -78,18 +79,21 @@ class BNO055 {
   BNO055 &operator=(const BNO055 &) = delete;
 
   struct Output {
-    Eigen::Quaternionf quat;
-    Eigen::Vector3f acc;
-    Eigen::Vector3f gyro;
+    Eigen::Quaternionf quat = Eigen::Quaternionf::Identity();
+    Eigen::Vector3f acc = Eigen::Vector3f::Zero();
+    Eigen::Vector3f gyro = Eigen::Vector3f::Zero();
 
     // Timestamp of when the data was sent from the sensor to the Raspberry Pi
-    std::chrono::high_resolution_clock::time_point packet_timestamp;
+    std::chrono::high_resolution_clock::time_point packet_timestamp{};
 
     // Timestamp of when the data was actually measured by the sensor
-    std::chrono::high_resolution_clock::time_point measurement_timestamp;
+    std::chrono::high_resolution_clock::time_point measurement_timestamp{};
   };
 
-  Output sample();
+  // Returns fresh sensor sample only when a reports-channel packet arrived.
+  // Control/advert packets are drained but do not count as fresh (иначе при
+  // мёртвом BNO timestamp «омолаживается», а кватернион остаётся старым кривым).
+  std::optional<Output> sample();
   void read_vector(int addr, float scale, int num_elt, float *out);
 
  private:

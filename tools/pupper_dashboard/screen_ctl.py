@@ -25,8 +25,10 @@ SCREEN_ROOT = DASH_ROOT.parent / "pupper_screen"
 MEDIA = SCREEN_ROOT / "media"
 LIBRARY = MEDIA / "library.json"
 VIEW_HTML = DASH_ROOT / "view.html"
-CHROMIUM_PROFILE = Path("/tmp/fenenka-screen-chromium")
+CHROMIUM_PROFILE = Path("/tmp/fenek-screen-chromium")
 VIEW_URL = f"http://127.0.0.1:{PORT}/view"
+CDP_PORT = 9222
+CDP_BASE = f"http://127.0.0.1:{CDP_PORT}"
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VIDEO_EXT = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".ogv"}
@@ -128,25 +130,127 @@ def _youtube_watch_url(youtube_id: str) -> str:
 
 
 def _display_url(item: dict | None) -> str:
+    # Живые виды и медиа остаются на /view (страница сама переключается по /api/current).
+    # YouTube — отдельный URL: iframe с localhost блокируется.
     if item and item.get("type") == "youtube" and item.get("youtube_id"):
         return _youtube_watch_url(item["youtube_id"])
-    if item and item.get("type") == "live":
-        return f"{VIEW_URL}?mode={item['mode']}"
     return VIEW_URL
+
+
+def _cdp_json(path: str):
+    import urllib.request
+
+    with urllib.request.urlopen(f"{CDP_BASE}{path}", timeout=2.0) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _cdp_page() -> dict | None:
+    try:
+        tabs = _cdp_json("/json/list")
+    except Exception:
+        return None
+    for tab in tabs:
+        if tab.get("type") == "page" and tab.get("webSocketDebuggerUrl"):
+            return tab
+    return None
+
+
+def _ws_cdp_navigate(ws_url: str, url: str) -> None:
+    """Один CDP Page.navigate без сторонних пакетов."""
+    import base64
+    import hashlib
+    import select
+    import socket
+    import struct
+    from urllib.parse import urlparse
+
+    u = urlparse(ws_url)
+    host, port = u.hostname or "127.0.0.1", u.port or 80
+    path = u.path + (("?" + u.query) if u.query else "")
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    req = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    ).encode()
+    sock = socket.create_connection((host, port), timeout=3.0)
+    sock.sendall(req)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            sock.close()
+            raise RuntimeError("CDP websocket: нет ответа handshake")
+        buf += chunk
+    head, _ = buf.split(b"\r\n\r\n", 1)
+    if b"101" not in head.split(b"\r\n", 1)[0]:
+        sock.close()
+        raise RuntimeError(f"CDP websocket handshake failed: {head[:120]!r}")
+    expected = base64.b64encode(
+        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+    ).decode()
+    if expected.encode() not in head:
+        sock.close()
+        raise RuntimeError("CDP websocket: плохой accept")
+
+    payload = json.dumps(
+        {"id": 1, "method": "Page.navigate", "params": {"url": url}}
+    ).encode("utf-8")
+    mask = os.urandom(4)
+    header = bytearray([0x81])
+    n = len(payload)
+    if n < 126:
+        header.append(0x80 | n)
+    elif n < 65536:
+        header.append(0x80 | 126)
+        header.extend(struct.pack("!H", n))
+    else:
+        header.append(0x80 | 127)
+        header.extend(struct.pack("!Q", n))
+    header.extend(mask)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    sock.sendall(header + masked)
+    # Коротко ждём ack, но не блокируем надолго.
+    ready, _, _ = select.select([sock], [], [], 1.0)
+    if ready:
+        sock.recv(65536)
+    sock.close()
+
+
+def navigate_chromium(url: str) -> bool:
+    """Перейти на URL в уже открытом kiosk. False — CDP недоступен."""
+    page = _cdp_page()
+    if page is None:
+        return False
+    current = page.get("url") or ""
+    if current.rstrip("/") == url.rstrip("/"):
+        return True
+    # Уже на /view, а нужен снова /view — контент подтянется через poll.
+    if current.startswith(VIEW_URL) and url.startswith(VIEW_URL):
+        return True
+    _ws_cdp_navigate(page["webSocketDebuggerUrl"], url)
+    return True
 
 
 def start_chromium(url: str = VIEW_URL, *, force: bool = False) -> None:
     global _chromium_proc
     if chromium_running():
         if not force:
+            navigate_chromium(url)
             return
         stop_chromium()
-        time.sleep(0.6)
+        time.sleep(0.4)
     CHROMIUM_PROFILE.mkdir(parents=True, exist_ok=True)
     browser = "chromium-browser" if Path("/usr/bin/chromium-browser").exists() else "chromium"
     cmd = [
         browser,
         f"--user-data-dir={CHROMIUM_PROFILE}",
+        f"--remote-debugging-port={CDP_PORT}",
+        "--remote-allow-origins=*",
         "--kiosk",
         "--start-fullscreen",
         "--noerrdialogs",
@@ -156,7 +260,7 @@ def start_chromium(url: str = VIEW_URL, *, force: bool = False) -> None:
         "--autoplay-policy=no-user-gesture-required",
         url,
     ]
-    log_path = Path("/tmp/fenenka-screen-chromium.log")
+    log_path = Path("/tmp/fenek-screen-chromium.log")
     log_f = log_path.open("w", encoding="utf-8")
     _chromium_proc = subprocess.Popen(
         cmd,
@@ -165,14 +269,19 @@ def start_chromium(url: str = VIEW_URL, *, force: bool = False) -> None:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    time.sleep(1.0)
-    if _chromium_proc.poll() is not None:
-        log_f.close()
-        log_tail = log_path.read_text(encoding="utf-8")[-800:]
-        raise RuntimeError(
-            f"Chromium сразу завершился (код {_chromium_proc.returncode}). "
-            f"Лог: {log_path}\n{log_tail}"
-        )
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if _chromium_proc.poll() is not None:
+            log_f.close()
+            log_tail = log_path.read_text(encoding="utf-8")[-800:]
+            raise RuntimeError(
+                f"Chromium сразу завершился (код {_chromium_proc.returncode}). "
+                f"Лог: {log_path}\n{log_tail}"
+            )
+        if _cdp_page() is not None:
+            return
+        time.sleep(0.2)
+    # Браузер жив, даже если CDP ещё не ответил.
 
 
 def stop_chromium() -> None:
@@ -184,6 +293,17 @@ def stop_chromium() -> None:
     for pid in _chromium_pids():
         os.kill(int(pid), signal.SIGTERM)
     time.sleep(0.3)
+
+
+def apply_display(item: dict | None) -> None:
+    """Показать item без перезапуска браузера (если он уже открыт)."""
+    url = _display_url(item)
+    if chromium_running():
+        if not navigate_chromium(url):
+            # Старый профиль без CDP — один раз перезапустим с debug-портом.
+            start_chromium(url, force=True)
+        return
+    start_chromium(url, force=False)
 
 
 def json_response(handler: BaseHTTPRequestHandler, code: int, payload: dict) -> None:
@@ -289,7 +409,7 @@ def handle_post(handler: BaseHTTPRequestHandler) -> bool:
             return True
         data["current"] = item_id
         _save_library(data)
-        start_chromium(_display_url(item), force=True)
+        apply_display(item)
         json_response(handler, 200, {"ok": True, "item": item, "chromium": True})
         return True
     if path == "/api/show_live":
@@ -302,7 +422,7 @@ def handle_post(handler: BaseHTTPRequestHandler) -> bool:
         data = _load_library()
         data["current"] = item["id"]
         _save_library(data)
-        start_chromium(_display_url(item), force=True)
+        apply_display(item)
         json_response(handler, 200, {"ok": True, "item": item, "chromium": True})
         return True
     if path == "/api/screen_stop":
@@ -315,7 +435,7 @@ def handle_post(handler: BaseHTTPRequestHandler) -> bool:
     if path == "/api/open_screen":
         data = _load_library()
         item = _find_item(data, data["current"]) if data.get("current") else None
-        start_chromium(_display_url(item), force=True)
+        apply_display(item)
         json_response(handler, 200, {"ok": True, "chromium": True})
         return True
     return False

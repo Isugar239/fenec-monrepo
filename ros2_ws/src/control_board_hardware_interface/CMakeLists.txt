@@ -39,7 +39,8 @@ ament_target_dependencies(
   tf2
 )
 
-target_link_libraries(control_board_hardware_interface yaml-cpp)
+find_library(GPIOD_LIBRARY gpiod REQUIRED)
+target_link_libraries(control_board_hardware_interface yaml-cpp ${GPIOD_LIBRARY})
 
 pluginlib_export_plugin_description_file(hardware_interface control_board_hardware_interface.xml)
 

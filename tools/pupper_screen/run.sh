@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-exec python3 -u server.py
+# Экран перенесён в пульт Фененки (:8091). Этот сервис больше не нужен.
+echo "pupper-screen отключён: управление экраном в http://<ip>:8091 (демонстрация)."
+exit 0

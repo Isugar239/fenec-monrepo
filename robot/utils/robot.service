@@ -5,7 +5,9 @@ Description=robot
 User=pi
 WorkingDirectory=/home/pi
 ExecStart=/home/pi/pupperv3-monorepo/robot/utils/robot.sh
-CapabilityBoundingSet=CAP_SYS_NICE
+# CAP_SYS_NICE — RT-приоритеты. SETUID/SETGID/DAC_OVERRIDE — чтобы sudo
+# мог дёргать unbind/bind I2C при залипании BNO (иначе sudo: Operation not permitted).
+CapabilityBoundingSet=CAP_SYS_NICE CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE
 LimitRTPRIO=infinity
 LimitCPU=infinity
 

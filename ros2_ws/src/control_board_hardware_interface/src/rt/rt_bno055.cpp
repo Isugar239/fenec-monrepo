@@ -90,7 +90,12 @@ bool BNO055::receivePacket(void) {
   int response = read(m_fd, &packetHeader, headerLength);
   // printf("%i\r\n",response);
   if (response != headerLength) {
-    printf("[BNO055] failed to read header for receivePacket: %s\n", strerror(errno));
+    static auto last_err = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_err >= std::chrono::seconds(2)) {
+      printf("[BNO055] failed to read header for receivePacket: %s\n", strerror(errno));
+      last_err = now;
+    }
     return false;
   }
 
@@ -211,26 +216,55 @@ void BNO055::setFeatureCommand(uint8_t reportID, uint16_t timeBetweenReports) {
 }
 bool BNO055::dataAvailable(void) {
   if (receivePacket() == true) {
-    // Check to see if this packet is a sensor reporting its data to us
-    // printf("here\n");
     if (shtpHeader[2] == CHANNEL_REPORTS) {
-      //   printf("got channel report. shtpData[0]=%d\n", static_cast<int>(shtpData[0]));
       if (shtpData[0] == SHTP_REPORT_BASE_TIMESTAMP) {
-        // printf("got base timestamp\n");
-        parseInputReport();  // This will update the rawAccelX, etc variables depending on which
-                             // feature report is found
-        return (true);
+        parseInputReport();
+        return true;
       }
     } else if (shtpHeader[2] == CHANNEL_CONTROL) {
-      //   printf("got channel control\n");
-      parseCommandReport();  // This will update responses to commands, calibrationStatus, etc.
-      return (true);
+      parseCommandReport();
+      // Control не даёт свежий quat/gyro — только drain FIFO.
+      return false;
     } else {
       printf("IMU got wack data\n");
     }
   }
 
-  return (false);
+  return false;
+}
+
+std::optional<BNO055::Output> BNO055::sample() {
+  // Drain всю FIFO: control/advert не должны прерывать чтение sensor report.
+  bool got_sensor = false;
+  while (receivePacket() == true) {
+    if (shtpHeader[2] == CHANNEL_REPORTS && shtpData[0] == SHTP_REPORT_BASE_TIMESTAMP) {
+      parseInputReport();
+      latest_packet_timestamp = std::chrono::high_resolution_clock::now();
+      got_sensor = true;
+    } else if (shtpHeader[2] == CHANNEL_CONTROL) {
+      parseCommandReport();
+    } else {
+      printf("IMU got wack data\n");
+    }
+  }
+  if (!got_sensor) {
+    return std::nullopt;
+  }
+
+  Output result;
+  result.quat.x() = getQuatI();
+  result.quat.y() = getQuatJ();
+  result.quat.z() = getQuatK();
+  result.quat.w() = getQuatReal();
+
+  result.gyro(0) = getGyroX();
+  result.gyro(1) = getGyroY();
+  result.gyro(2) = getGyroZ();
+
+  result.packet_timestamp = latest_packet_timestamp;
+  result.measurement_timestamp = latest_packet_timestamp - std::chrono::microseconds(timeStamp);
+
+  return result;
 }
 float BNO055::getQuatI() {
   float quat = qToFloat(rawQuatI, rotationVector_Q1);
@@ -453,29 +487,3 @@ void BNO055::parseCommandReport(void) {
   // TODO additional feature reports may be strung together. Parse them all.
 }
 
-BNO055::Output BNO055::sample() {
-  // Typically has two messages available in one call to sample()
-  while (dataAvailable() == true) {
-    latest_packet_timestamp = std::chrono::high_resolution_clock::now();
-  }
-  Output result;
-  result.quat.x() = getQuatI();
-  result.quat.y() = getQuatJ();
-  result.quat.z() = getQuatK();
-  result.quat.w() = getQuatReal();
-
-  // Accelerometer currently not enabled
-  //   result.acc(0) = getAccelX();
-  //   result.acc(1) = getAccelY();
-  //   result.acc(2) = getAccelZ();
-
-  result.gyro(0) = getGyroX();
-  result.gyro(1) = getGyroY();
-  result.gyro(2) = getGyroZ();
-
-  // Record time data read from IMU
-  result.packet_timestamp = latest_packet_timestamp;
-  result.measurement_timestamp = latest_packet_timestamp - std::chrono::microseconds(timeStamp);
-
-  return result;
-}

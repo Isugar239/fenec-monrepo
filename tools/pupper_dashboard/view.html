@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Фенек — экран</title>
+<style>
+  html, body {
+    margin: 0; width: 100%; height: 100%; background: #000;
+    overflow: hidden; color: #888; font: 18px/1.3 system-ui, sans-serif;
+  }
+  #stage {
+    width: 100vw; height: 100vh; display: flex;
+    align-items: center; justify-content: center; background: #000;
+  }
+  #stage img, #stage video {
+    max-width: 100%; max-height: 100%; width: 100%; height: 100%;
+    object-fit: contain; background: #000;
+  }
+  #stage iframe { border: 0; width: 100%; height: 100%; }
+  #live-wrap { width: 100%; height: 100%; display: flex; flex-direction: column; background: #080b10; }
+  #live-wrap canvas { flex: 1; width: 100%; display: block; }
+  #live-label {
+    position: absolute; left: 24px; top: 18px; color: #cfd6e0;
+    font: 600 22px/1.2 system-ui, sans-serif; letter-spacing: 0.02em;
+    text-shadow: 0 2px 12px #000;
+  }
+  #idle { text-align: center; padding: 24px; opacity: 0.7; }
+  #idle small { display: block; margin-top: 8px; color: #555; font-size: 0.8rem; }
+  .spinner {
+    width: 64px; height: 64px; margin: 0 auto 12px;
+    border: 4px solid #333; border-top-color: #3d8bfd;
+    border-radius: 50%; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="idle"><div class="spinner"></div>Ожидание контента<small>выбери вид или файл в пульте</small></div>
+</div>
+<script>
+const stage = document.getElementById("stage");
+const LEG_COLORS = { front_r: "#ff7a59", front_l: "#ffd166", back_r: "#4cc9f0", back_l: "#b388ff" };
+const LEG_RU = { front_r: "ПП", front_l: "ПЛ", back_r: "ЗП", back_l: "ЗЛ" };
+const params = new URLSearchParams(location.search);
+let lastKey = "";
+let liveMode = params.get("mode"); // tri | motors | null
+let S = null;
+let cam = { az: -1.35, el: 0.12, dist: 0.4 };
+
+function idle() {
+  stage.innerHTML = '<div id="idle"><div class="spinner"></div>Ожидание контента<small>выбери вид или файл в пульте</small></div>';
+}
+
+function qmul(a, b) {
+  return [
+    a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],
+    a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0],
+    a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],
+    a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2],
+  ];
+}
+function qrot(q, v) {
+  const [x,y,z,w] = q;
+  const tx = 2*(y*v[2]-z*v[1]), ty = 2*(z*v[0]-x*v[2]), tz = 2*(x*v[1]-y*v[0]);
+  return [v[0]+w*tx+(y*tz-z*ty), v[1]+w*ty+(z*tx-x*tz), v[2]+w*tz+(x*ty-y*tx)];
+}
+function levelQuat(imu) {
+  if (!imu || !imu.q) return [0,0,0,1];
+  const yaw = imu.yaw * Math.PI / 180;
+  const qz = [0, 0, -Math.sin(yaw/2), Math.cos(yaw/2)];
+  return qmul(qz, imu.q);
+}
+
+function ensureLiveCanvas(label) {
+  if (!stage.querySelector("#live-cv")) {
+    stage.innerHTML = `<div id="live-wrap"><div id="live-label"></div><canvas id="live-cv"></canvas></div>`;
+  }
+  document.getElementById("live-label").textContent = label;
+  return document.getElementById("live-cv");
+}
+
+function drawLive() {
+  if (!liveMode) return;
+  const label = liveMode === "tri" ? "Фенек · треугольник" : "Фенек · все моторы";
+  const c = ensureLiveCanvas(label);
+  const W = c.clientWidth || window.innerWidth;
+  const H = c.clientHeight || window.innerHeight;
+  const pw = Math.round(W * devicePixelRatio), ph = Math.round(H * devicePixelRatio);
+  if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(pw / W, 0, 0, ph / H, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const demoView = liveMode === "tri";
+  if (demoView) {
+    const leg = (S && S.demo && S.demo.params && S.demo.params.leg) || "front_r";
+    cam.az = leg.endsWith("_l") ? 1.35 : -1.35;
+    cam.dist = 0.4; cam.el = 0.12;
+  } else {
+    cam = { az: -2.9, el: 0.35, dist: 0.75 };
+  }
+
+  const eye = [cam.dist*Math.cos(cam.el)*Math.cos(cam.az), cam.dist*Math.cos(cam.el)*Math.sin(cam.az), cam.dist*Math.sin(cam.el)];
+  const fw = eye.map((v) => -v / cam.dist);
+  let rt = [fw[1], -fw[0], 0];
+  const rn = Math.hypot(...rt) || 1;
+  rt = rt.map((v) => v / rn);
+  const up = [rt[1]*fw[2]-rt[2]*fw[1], rt[2]*fw[0]-rt[0]*fw[2], rt[0]*fw[1]-rt[1]*fw[0]];
+  const F = Math.min(W, H) * 1.3;
+  let focus = [0, 0, 0];
+  const demoLeg = (S && S.demo && S.demo.params && S.demo.params.leg) || "front_r";
+  const legsNow = S && (S.legs || S.legs_cmd);
+  const focusLeg = legsNow && legsNow[demoLeg];
+  if (demoView && focusLeg) focus = [focusLeg.hip[0], focusLeg.hip[1], focusLeg.hip[2] - 0.07];
+  const P = (p) => {
+    const d = [p[0]-focus[0]-eye[0], p[1]-focus[1]-eye[1], p[2]-focus[2]-eye[2]];
+    const z = d[0]*fw[0]+d[1]*fw[1]+d[2]*fw[2];
+    return [W/2 + F*(d[0]*rt[0]+d[1]*rt[1]+d[2]*rt[2])/z, H/2 - F*(d[0]*up[0]+d[1]*up[1]+d[2]*up[2])/z];
+  };
+  const line = (a, b, color, w = 1) => {
+    const A = P(a), B = P(b);
+    ctx.strokeStyle = color; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+  };
+  const q = demoView ? [0,0,0,1] : levelQuat(S && S.imu);
+  const R = (p) => qrot(q, p);
+  const groundZ = (S && S.ground_z != null) ? S.ground_z : -0.14;
+  for (let i = -5; i <= 5; i++) {
+    line([i*0.05, -0.25, groundZ], [i*0.05, 0.25, groundZ], "#1f2630");
+    line([-0.25, i*0.05, groundZ], [0.25, i*0.05, groundZ], "#1f2630");
+  }
+  const bx = 0.12, by = 0.06, bz = 0.03;
+  const corners = [];
+  for (const sx of [-1,1]) for (const sy of [-1,1]) for (const sz of [-1,1]) corners.push(R([sx*bx, sy*by, sz*bz]));
+  const edges = [[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]];
+  for (const [a,b] of edges) line(corners[a], corners[b], "#7d8898", 2);
+  for (const [a,b] of [[4,5],[5,7],[7,6],[6,4]]) line(corners[a], corners[b], "#5fd08a", 4);
+  line(R([bx,0,bz]), R([bx+0.06,0,bz]), "#5fd08a", 3);
+
+  const drawLegs = (legs, alpha, width, onlyLeg) => {
+    if (!legs) return;
+    ctx.save(); ctx.globalAlpha = alpha;
+    for (const [leg, l] of Object.entries(legs)) {
+      if (onlyLeg && leg !== onlyLeg) continue;
+      const col = LEG_COLORS[leg];
+      line(R(l.hip), R(l.knee), col, width);
+      line(R(l.knee), R(l.foot), col, width);
+      const ft = P(R(l.foot));
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(ft[0], ft[1], alpha < 1 ? 4 : 7, 0, 7); ctx.fill();
+      if (alpha >= 1) { ctx.font = "20px system-ui"; ctx.fillText(LEG_RU[leg], ft[0]+9, ft[1]+5); }
+    }
+    ctx.restore();
+  };
+
+  if (demoView) {
+    const tri = S && S.demo && S.demo.tri;
+    if (tri && tri.length === 3) {
+      const pts = tri.map((p) => P(R(p)));
+      ctx.save();
+      ctx.globalAlpha = 0.22; ctx.fillStyle = "#f0b94a";
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); ctx.lineTo(pts[1][0], pts[1][1]); ctx.lineTo(pts[2][0], pts[2][1]); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1; ctx.strokeStyle = "#f0b94a"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); ctx.lineTo(pts[1][0], pts[1][1]); ctx.lineTo(pts[2][0], pts[2][1]); ctx.closePath(); ctx.stroke();
+      ctx.restore();
+    }
+    if (S && S.legs_cmd) drawLegs(S.legs_cmd, 0.35, 3, demoLeg);
+    if (S && S.legs) drawLegs(S.legs, 1, 6, demoLeg);
+  } else {
+    if (S && S.legs_cmd) drawLegs(S.legs_cmd, 0.35, 3, null);
+    if (S && S.legs) drawLegs(S.legs, 1, 6, null);
+    if (S && S.imu) {
+      ctx.fillStyle = "#cfd6e0"; ctx.font = "22px ui-monospace, Consolas";
+      ctx.fillText(`крен ${S.imu.roll.toFixed(1)}°  тангаж ${S.imu.pitch.toFixed(1)}°`, 24, H - 28);
+    }
+  }
+  if (!S || (!S.legs && !S.legs_cmd)) {
+    ctx.fillStyle = "#8a93a3"; ctx.font = "22px system-ui";
+    ctx.fillText("нет данных суставов", 24, 56);
+  }
+}
+
+function showItem(item) {
+  if (item.type === "live") {
+    const key = "live:" + item.mode;
+    liveMode = item.mode;
+    if (key !== lastKey) {
+      lastKey = key;
+      // сброс canvas при смене режима, чтобы не оставался старый кадр
+      if (stage.querySelector("#live-cv")) stage.innerHTML = "";
+    }
+    drawLive();
+    return;
+  }
+  liveMode = null;
+  const key = item.type + ":" + (item.file || item.youtube_id || "");
+  if (key === lastKey) return;
+  lastKey = key;
+  if (item.type === "image") {
+    stage.innerHTML = `<img src="/media/${encodeURIComponent(item.file)}?t=${Date.now()}" alt="">`;
+    return;
+  }
+  if (item.type === "video") {
+    stage.innerHTML = `<video src="/media/${encodeURIComponent(item.file)}" autoplay loop controls playsinline></video>`;
+    const v = stage.querySelector("video");
+    v.play().catch(() => {});
+    return;
+  }
+  if (item.type === "youtube") {
+    stage.innerHTML = `<div id="idle">YouTube открывается в браузере…<small>${item.youtube_id}</small></div>`;
+    return;
+  }
+  idle();
+}
+
+async function tick() {
+  try {
+    const res = await fetch("/api/current", { cache: "no-store" });
+    const data = await res.json();
+    if (data.item) {
+      showItem(data.item);
+    } else if (liveMode) {
+      // режим из URL, даже если current сброшен — держим вид
+      drawLive();
+    } else if (lastKey !== "") {
+      lastKey = "";
+      idle();
+    }
+  } catch (_) {}
+
+  if (liveMode) {
+    try {
+      const st = await fetch("/api/state", { cache: "no-store" });
+      S = await st.json();
+      drawLive();
+    } catch (_) {}
+  }
+}
+
+tick();
+setInterval(tick, 120);
+window.addEventListener("resize", () => { if (liveMode) drawLive(); });
+</script>
+</body>
+</html>

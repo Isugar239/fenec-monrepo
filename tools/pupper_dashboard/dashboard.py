@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Пульт Фененки. Открыть в браузере: http://<ip-робота>:8091
+"""Пульт Фенека. Открыть в браузере: http://<ip-робота>:8091
 
 Работает рядом с robot.service, SPI не трогает: только ROS-топики и сервисы.
 Скорость шлёт в /llm_cmd_vel — джойстик в cmd_vel_mux главнее и перебивает пульт.
@@ -37,18 +37,43 @@ from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Empty, Float32, Float32MultiArray, Float64MultiArray, String
+from std_msgs.msg import Empty, Float32, Float32MultiArray, Float64MultiArray, String, Bool
 from tf2_ros import Buffer, TransformListener
 
 PORT = 8091
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 from open_loop_gait import GaitIK, smooth  # noqa: E402
 from pupper_kinematics import LEG_INDEX, Kinematics  # noqa: E402
 from pupper_record import Recorder  # noqa: E402
-
 import screen_ctl  # noqa: E402
+
+VPN_UNIT = "awg-quick@awg0.service"
+
+
+def vpn_active() -> bool:
+    r = subprocess.run(
+        ["systemctl", "is-active", VPN_UNIT],
+        capture_output=True,
+        text=True,
+    )
+    return r.stdout.strip() == "active"
+
+
+def vpn_set(on: bool) -> str | None:
+    action = "start" if on else "stop"
+    r = subprocess.run(
+        ["sudo", "-n", "systemctl", action, VPN_UNIT],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or f"systemctl {action} failed").strip()
+        return err
+    return None
 
 JOINTS = [
     "leg_front_r_1", "leg_front_r_2", "leg_front_r_3",
@@ -489,9 +514,15 @@ class Dashboard(Node):
             self.create_publisher(Float64MultiArray, f"/{name}/commands", 10) for name in FORWARD
         ]
         self.rehome_pub = self.create_publisher(Float32MultiArray, "/motor_rehome", 10)
+        self.imu_power_pub = self.create_publisher(Bool, "/imu_power", 10)
+        self.imu_power_on = True
         # transient_local, как у издателя: пульт, открытый после запуска, сразу видит итог хоуминга.
         self.create_subscription(
             String, "/motor_homing/status", self.on_homing_status,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        self.create_subscription(
+            Bool, "/imu_power_state", self.on_imu_power_state,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL),
         )
         self.list_cli = self.create_client(ListControllers, "/controller_manager/list_controllers")
@@ -604,6 +635,10 @@ class Dashboard(Node):
                     self.demo_note = "хоуминг завершён" + (
                         ": без нуля " + ", ".join(data["skipped"]) if data["skipped"] else ": все суставы нашли ноль"
                     )
+
+    def on_imu_power_state(self, msg: Bool) -> None:
+        with self.lock:
+            self.imu_power_on = bool(msg.data)
 
     def on_log(self, msg: Log) -> None:
         if msg.level < Log.WARN or msg.name == self.get_name():
@@ -1455,6 +1490,13 @@ class Dashboard(Node):
     def revive_motors(self) -> None:
         self.revive_pub.publish(Empty())
 
+    def set_imu_power(self, on: bool) -> None:
+        msg = Bool()
+        msg.data = bool(on)
+        self.imu_power_pub.publish(msg)
+        with self.lock:
+            self.imu_power_on = bool(on)
+
     def estop(self) -> None:
         self.ears_off()
         self.stop_motion("АВАРИЙНЫЙ СТОП: момент ослаблен, включи походку заново")
@@ -1721,6 +1763,7 @@ class Dashboard(Node):
                 "record": {"active": self.recorder.active, "t": now - self.rec_t0 if self.recorder.active else None,
                            "note": self.rec_note},
                 "imu": imu,
+                "imu_power": self.imu_power_on,
                 "imu_hist": hist,
                 "joints": joints,
                 "joints_age": now - self.joint_t if self.joint_t else None,
@@ -1818,6 +1861,8 @@ def make_handler(node: Dashboard):
             path = self._path()
             if path == "/api/state":
                 self._json(200, node.snapshot())
+            elif path == "/api/vpn":
+                self._json(200, {"active": vpn_active(), "unit": VPN_UNIT})
             elif path in ("/", "/index.html"):
                 with open(page_path, "rb") as f:
                     self._send(200, "text/html; charset=utf-8", f.read())
@@ -1859,6 +1904,8 @@ def make_handler(node: Dashboard):
                 node.estop()
             elif path == "/api/revive":
                 node.revive_motors()
+            elif path == "/api/imu_power":
+                node.set_imu_power(bool(body.get("on")))
             elif path == "/api/gait":
                 err = node.set_gait(bool(body.get("on")))
             elif path == "/api/policy_offset":
@@ -1889,6 +1936,8 @@ def make_handler(node: Dashboard):
                 err = node.api_trim_save()
             elif path == "/api/odom_reset":
                 node.api_odom_reset()
+            elif path == "/api/vpn":
+                err = vpn_set(bool(body.get("on")))
             else:
                 self.send_error(404)
                 return
@@ -1915,7 +1964,7 @@ def main() -> None:
     executor.add_node(node)
     threading.Thread(target=executor.spin, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), make_handler(node))
-    print(f"Пульт Фененки: http://<ip-робота>:{PORT}", flush=True)
+    print(f"Пульт Фенека: http://<ip-робота>:{PORT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

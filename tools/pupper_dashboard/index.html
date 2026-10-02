@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pupper — пульт</title>
+<title>Фенек — пульт</title>
 <style>
   :root {
     --bg: #090d13; --bg2: #0d121a; --panel: #121822; --panel2: #0f141c; --raised: #1a2230;
@@ -172,7 +172,7 @@
 
   section.hero { border-color: #35527a; background:
       radial-gradient(900px 220px at 0% 0%, rgba(108, 178, 255, 0.17), transparent 65%), var(--panel); }
-  section.hero.nn { border-color: #4a407c; background:
+  section.hero.gait { border-color: #4a407c; background:
       radial-gradient(900px 220px at 0% 0%, rgba(169, 139, 255, 0.17), transparent 65%), var(--panel); }
 
   .divider { display: flex; align-items: center; gap: 14px; margin: 14px 2px 0; color: var(--dim); }
@@ -195,7 +195,7 @@
   }
   .step label.chk { color: var(--text); display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 2px 0; }
 
-  /* ---------- нейросеть ---------- */
+  /* ---------- походка ---------- */
   .nn-grid { display: grid; grid-template-columns: minmax(300px, 1.3fr) minmax(260px, 1fr); gap: 20px; align-items: center; }
   @media (max-width: 860px) { .nn-grid { grid-template-columns: 1fr; } }
   .nn-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
@@ -250,6 +250,25 @@
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); transition: all 0.22s; z-index: 50; max-width: min(640px, 92vw);
   }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  .view-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .vtab {
+    flex: 1; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--dim); font-weight: 600; cursor: pointer;
+  }
+  .vtab.active { color: #fff; border-color: #3a5f8f; background: rgba(108,178,255,0.16); }
+  .screen-box { margin-top: 12px; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--panel2); }
+  .screen-box h3 { margin: 0 0 8px; font-size: 14.5px; font-weight: 600; color: #dbe3ef; }
+  .media-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; margin-top: 8px; }
+  .media-item {
+    display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--line2); border-radius: 10px; background: #0e131b;
+  }
+  .media-item.active { border-color: var(--accent); }
+  .media-item .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .media-item .type { color: var(--dim); font-size: 12px; }
+  .filebtn { display: inline-block; }
+  .filebtn input { display: none; }
   #toast.bad { background: #3a1b1d; border-color: #8a3a3f; color: #ffc4c4; }
 </style>
 </head>
@@ -258,10 +277,10 @@
   <div class="hwrap">
     <div class="topbar">
       <div class="brand">
-        <span class="mark" aria-hidden="true">P</span>
+        <span class="mark" aria-hidden="true">Ф</span>
         <div>
-          <h1>Pupper</h1>
-          <div class="brand-sub">пульт корпуса и походки</div>
+          <h1>Фенек</h1>
+          <div class="brand-sub">пульт управления</div>
         </div>
       </div>
       <div class="statuses">
@@ -271,13 +290,16 @@
         <span id="src" class="pill">источник ?</span>
       </div>
       <div class="estops">
+        <span id="vpn-state" class="pill">VPN ?</span>
+        <button id="vpn-up" class="sm">VPN up</button>
+        <button id="vpn-down" class="sm">VPN down</button>
         <button id="stop" class="stop" title="Пробел">СТОП (пробел)</button>
         <button id="estop" class="estop" title="Esc">АВАРИЯ (Esc)</button>
       </div>
     </div>
     <div class="navrow">
-      <a class="chip hot" href="#demo">Демо-режим</a>
-      <a class="chip hot" href="#neural">Нейронная походка</a>
+      <a class="chip hot" href="#demo">Демонстрация</a>
+      <a class="chip hot" href="#gait-sec">Походка</a>
       <span class="sep"></span>
       <a class="chip" href="#pose-sec">Поза</a>
       <a class="chip" href="#imu-sec">IMU</a>
@@ -287,8 +309,8 @@
       <a class="chip" href="#rec-sec">Запись</a>
       <a class="chip" href="#joints-sec">Суставы</a>
       <span class="sep"></span>
-      <button id="stand" class="sm" title="Без нейросети: плавно в default_joint_pos и держать">Стойка (без нейросети)</button>
-      <button id="revive" class="sm" title="Exit и сразу Enter всем моторам. Хоуминга нет. Момент пропадёт на долю секунды.">Оживить моторы</button>
+      <button id="stand" class="sm" title="Плавно в стойку и держать">Стойка</button>
+      <button id="revive" class="sm">Оживить моторы</button>
     </div>
   </div>
 </header>
@@ -298,18 +320,39 @@
   <section class="card hero" id="demo">
     <div class="sec-head">
       <span class="tag">ДЕМО</span>
-      <h2>Демонстрационный режим</h2>
-      <p class="sub">Хоуминг, треугольник обратной кинематики, стойка по IK и сервоприводы ушей. Робот должен лежать или висеть на подставке.</p>
+      <h2>Демонстрация</h2>
     </div>
     <div class="demo-grid">
       <div class="demo-view">
+        <div class="view-tabs">
+          <button type="button" class="vtab active" data-dview="tri">Треугольник</button>
+          <button type="button" class="vtab" data-dview="motors">Все моторы</button>
+        </div>
         <canvas id="demo-pose" height="440"></canvas>
-        <div class="hint">Вид сбоку на выбранную ногу, тяни мышью, колесо — масштаб. Жёлтый треугольник — путь лапы. Яркая нога — как есть на роботе, полупрозрачная — куда её командует стойка.</div>
         <div id="demo-tri-info" class="msg mono"></div>
+        <div class="row" style="margin-top:10px">
+          <button id="screen-open" class="sm primary">Открыть экран</button>
+          <button id="screen-stop" class="sm stop">Стоп экран</button>
+          <span id="scr-state" class="pill">экран выкл</span>
+        </div>
+        <div class="screen-box">
+          <h3>Медиа на экран</h3>
+          <div class="row">
+            <button type="button" id="pick-file" class="sm">Файл</button>
+            <input id="screen-file" type="file" hidden accept="image/*,video/*,.mp4,.webm,.mov,.mkv,.jpg,.jpeg,.png,.gif,.webp">
+            <button id="screen-upload" class="sm primary" disabled>Загрузить</button>
+          </div>
+          <div class="row">
+            <input id="screen-yt" type="text" style="flex:1" placeholder="YouTube-ссылка">
+            <button id="screen-yt-btn" class="sm">Добавить</button>
+          </div>
+          <div id="screen-msg" class="msg"></div>
+          <div id="screen-list" class="media-list"></div>
+        </div>
       </div>
       <div>
         <div class="step">
-          <h3><b>1</b>Хоуминг: робот узнаёт, где у него нули</h3>
+          <h3><b>1</b>Хоуминг</h3>
           <div class="row">
             <span id="demo-homing-state" class="pill">статус неизвестен</span>
           </div>
@@ -328,13 +371,10 @@
             <button id="demo-home" class="primary">Хоуминг</button>
           </div>
           <div id="demo-homing-msg"></div>
-          <details class="help"><summary>Как это работает</summary>
-            <div class="hint">Каждая нога едет в упор колено → отведение → бедро, момент упирается в упор, и по нему запоминается ноль. Робот должен лежать или висеть на подставке: на время хоуминга моторы обмякают. Без успешного хоуминга «Стойка по IK» не включится.</div>
-          </details>
         </div>
 
         <div class="step">
-          <h3><b>2</b>Треугольник одной ноги</h3>
+          <h3><b>2</b>Треугольник</h3>
           <div class="row">
             <label>Нога</label>
             <select id="demo-tri-leg">
@@ -347,13 +387,10 @@
           <label class="chk"><input id="demo-tri" type="checkbox" checked> Показывать треугольник</label>
           <label class="chk"><input id="demo-tri-labels" type="checkbox" checked> Подписи углов</label>
           <label class="chk"><input id="demo-others" type="checkbox"> Показывать остальные ноги (бледно)</label>
-          <details class="help"><summary>Как это работает</summary>
-            <div class="hint">Лапа обходит три угла: вперёд по нижнему ребру, назад по нему же, затем в верхнюю точку и снова вперёд. Остальные ноги стоят. Так же, как в лабораторной CS123: одна нога, корпус на месте.</div>
-          </details>
         </div>
 
         <div class="step">
-          <h3><b>3</b>Анимация и настройки треугольника</h3>
+          <h3><b>3</b>Анимация</h3>
           <div class="row">
             <button id="demo-anim-on" class="primary" title="Лапа пойдёт по рёбрам треугольника: вперёд-низ, назад-низ, верх">Запустить анимацию</button>
             <button id="demo-anim-off" title="Плавно вернуть лапу на середину нижнего ребра">Погасить анимацию</button>
@@ -369,14 +406,11 @@
             <summary>Настройки треугольника</summary>
             <div id="demo-sliders"></div>
             <div class="row"><button id="demo-reset" class="sm">Сбросить настройки</button></div>
-            <details class="help"><summary>Что значат параметры</summary>
-              <div class="hint"><b>Нижнее ребро</b> — насколько лапа ниже плеча на двух нижних углах. <b>Половина основания</b> — вынос этих углов вперёд и назад (в лабораторной по 5 см). <b>Высота</b> — подъём верхней точки над ребром. В ролике верх на 6 см, но колено этого робота туда не достаёт: по умолчанию ребро опущено на 2 см, высота 4 см. Если поднять выше, пульт напишет, что колено упёрлось. «Погасить» плавно возвращает лапу на середину ребра. Робот должен висеть или лежать.</div>
-            </details>
           </details>
         </div>
 
         <div class="step">
-          <h3><b>4</b>Сервоприводы ушей</h3>
+          <h3><b>4</b>Уши</h3>
           <div class="row">
             <span id="ear-state" class="pill">выкл</span>
           </div>
@@ -394,20 +428,16 @@
           <div id="ear-note" class="msg"></div>
           <div id="ear-sliders"></div>
           <div class="row"><button id="ear-reset" class="sm">Сбросить края</button></div>
-          <details class="help"><summary>Подробнее про уши</summary>
-            <div class="hint">Края A и B задаются руками, от −1 до 1. Пока кнопка не нажата, ползунок ухо не двигает. Анимация берёт числа с ползунков сразу: сдвинул край во время движения — ухо поехало по новым краям. Сигнал ушей на GPIO 12 (контакт 32) и GPIO 13 (контакт 33), импульс аппаратный, 50 Гц. В нуле это ровные 1.5 мс. Ползунок свапа: 0 — левое на 12, правое на 13; 1 — левое на 13, правое на 12. «Отпустить», «СТОП» и «АВАРИЯ» выключают канал, импульс пропадает, ухо обмякает. Пока импульс есть, серва может греться, особенно если ухо упёрлось. GPIO 18 и 19 заняты звуковой картой.</div>
-          </details>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ===== 2. Нейронная походка ===== -->
-  <section class="card hero nn" id="neural">
+  <!-- ===== 2. Походка ===== -->
+  <section class="card hero" id="gait-sec">
     <div class="sec-head">
-      <span class="tag nn">НЕЙРОСЕТЬ</span>
-      <h2>Нейронная походка</h2>
-      <p class="sub">Политика ходьбы из нейросети. Включай походку, а наклон, который видит сеть, подкручивай ползунками на лету.</p>
+      <span class="tag">ПОХОДКА</span>
+      <h2>Походка</h2>
     </div>
     <div class="nn-actions">
       <button id="gait-on" class="primary">Включить походку</button>
@@ -418,8 +448,8 @@
       <div>
         <div class="row stretch">
           <label>Тангаж</label>
-          <input id="off-pitch" class="off-slider" type="range" min="-30" max="30" step="0.5" value="17.5">
-          <span id="off-pitch-v" class="mono">17.5°</span>
+          <input id="off-pitch" class="off-slider" type="range" min="-30" max="30" step="0.5" value="2">
+          <span id="off-pitch-v" class="mono">2.0°</span>
         </div>
         <div class="row stretch">
           <label>Крен</label>
@@ -427,48 +457,42 @@
           <span id="off-roll-v" class="mono">0.0°</span>
         </div>
         <div class="row">
+          <button type="button" class="sm primary" data-pitch="2">2°</button>
           <button type="button" class="sm" data-pitch="15">15°</button>
-          <button type="button" class="sm primary" data-pitch="17.5">17.5°</button>
-          <button type="button" class="sm" data-pitch="20">20°</button>
+          <button type="button" class="sm" data-pitch="17.5">17.5°</button>
           <button type="button" class="sm" data-pitch="0">Ноль</button>
         </div>
       </div>
       <div class="tiles" id="off-readout"></div>
     </div>
     <div id="off-note" class="msg" hidden></div>
-    <details class="help"><summary>Как работает оффсет наклона</summary>
-      <div class="hint">Roll и pitch в сеть не приходят числами. Туда уходит проекция гравитации, и эти оффсеты доворачивают её. Плюс по тангажу — сеть видит нос выше и опускает его. Плюс по крену — видит левый бок выше. Гироскоп не меняется. Ползунок применяется сразу, без перезапуска.</div>
-    </details>
   </section>
 
   <div class="divider"><h2>Остальное</h2></div>
 
   <div class="grid">
     <section class="card" id="pose-sec">
-      <div class="sec-head"><h2>Поза робота</h2><p class="sub">Суставы и датчик наклона</p></div>
+      <div class="sec-head"><h2>Поза</h2></div>
       <canvas id="pose" height="360"></canvas>
       <div id="tilt" class="msg" style="font-size:17px;font-weight:600"></div>
       <div id="feet" class="msg mono"></div>
-      <details class="help"><summary>Как читать картинку</summary>
-        <div class="hint">Яркие ноги — <b>как есть на роботе</b>. Полупрозрачные — <b>куда командует генератор</b>. Пол фиксированный (не «под нижней лапой»), поэтому если лапа волочится — она лежит на полу, а не «шагает в воздухе». Наклон корпуса берётся с датчика как есть, в том числе после падения. Камера сзади, тяни мышью. Цвета: <span style="color:var(--fr)">ПП</span>, <span style="color:var(--fl)">ПЛ</span>, <span style="color:var(--br)">ЗП</span>, <span style="color:var(--bl)">ЗЛ</span>.</div>
-      </details>
     </section>
 
     <section class="card" id="imu-sec">
       <div class="sec-head"><h2>Гироскоп / IMU</h2></div>
+      <label class="chk" style="margin-bottom:10px">
+        <input id="imu-pwr" type="checkbox" checked>
+        Питание BNO (GPIO17)
+      </label>
       <div class="grid2 mono" id="imu-kv"></div>
       <div id="imu-msg"></div>
       <canvas id="chart-att" height="150" style="margin-top:12px"></canvas>
       <canvas id="chart-gyro" height="150" style="margin-top:8px"></canvas>
-      <details class="help"><summary>Проверка ориентации датчика</summary>
-        <div class="hint">Подними нос робота — pitch должен уйти в минус, «гравитация в корпусе» по X — тоже в минус. Опусти правый бок — roll уйдёт в плюс, гравитация по Y — в минус. Покрути робота вокруг вертикали против часовой — гиро z в плюс. Если знаки или оси другие, углы БНО в components.xacro заданы неверно, и политика походки видит мир повёрнутым.</div>
-      </details>
     </section>
 
     <section class="card" id="map-sec">
       <div class="sec-head"><h2>Куда идти</h2></div>
       <canvas id="map" height="360"></canvas>
-      <div class="hint">Клик по карте — идти в точку. Shift+клик — добавить точку в маршрут. Колесо — масштаб. Позиция считается по командам скорости и курсу IMU: это оценка, реальный робот проскальзывает. Коэффициент одометрии поправляет длину.</div>
       <div class="row">
         <button data-step='{"kind":"straight","m":0.5}'>Вперёд 0.5 м</button>
         <button data-step='{"kind":"straight","m":1.0}'>Вперёд 1 м</button>
@@ -501,14 +525,12 @@
           <div class="row srow"><label>Коэф. одометрии</label><input id="scale" type="range" min="0.2" max="2.0" step="0.05"><span id="scale-v" class="mono"></span><span class="unit"></span></div>
         </div>
       </div>
-      <div class="hint">Держи W/S — вперёд/назад, A/D — вбок, Q/E — поворот. Отпустил — робот останавливается (пульт перестаёт слать команды, через 0.35 с скорость обнуляется). Джойстик, если подключён, главнее пульта.</div>
       <div class="grid2 mono" id="cmd-kv" style="margin-top:10px"></div>
     </section>
 
     <section class="card" id="tg-sec">
       <div class="sec-head">
         <h2>Генератор траекторий</h2>
-        <p class="sub">Шаг без нейросети</p>
         <div class="push"><span id="tg-state" class="pill">выкл</span></div>
       </div>
       <div class="row">
@@ -519,27 +541,19 @@
       <div id="tg-imu-sliders"></div>
       <div class="msg mono" id="tg-imu"></div>
       <div class="msg mono" id="tg-note"></div>
-      <details class="help"><summary>Советы по настройке</summary>
-        <div class="hint">Рысь: диагонали ПП+ЗЛ и ПЛ+ЗП. Старт: ~0.9 раз/с, длина шага ±3.2 см, подъём лапы 2.8 см. Не тяни «Длина шага» сразу к 5–6 см — дёргается и валится; поднимай по полсантиметра, когда уже идёт ровно. Ползунки на ходу. «Остановить шаг»/пробел — в стойку; Esc — стоп.</div>
-        <div class="hint"><b>Ровнять корпус всегда включено</b> (по наклону). Лапы на опущенной стороне вытягиваются, на поднятой подгибаются, до ±1.5 см. «Сила»/«дожим» держи маленькими на шаге (дожим ≈0), иначе качает. На подставке, длина шага 0: нос вниз рукой — передние лапы должны вытянуться. Если наоборот — знаки датчика в components.xacro. Датчик молчит &gt;0.2 с — шаг гаснет.</div>
-      </details>
     </section>
 
     <section class="card" id="rec-sec">
       <div class="sec-head">
-        <h2>Запись данных</h2>
-        <p class="sub">Для обучения</p>
+        <h2>Запись</h2>
         <div class="push"><span id="rec-state" class="pill">не пишу</span></div>
       </div>
       <div class="row">
-        <input id="rec-note" type="text" style="flex:1" placeholder="что делаем: подставка/пол, покрытие, режим, kp">
+        <input id="rec-note" type="text" style="flex:1" placeholder="заметка к записи">
         <button id="rec-on" class="primary">● Записать</button>
         <button id="rec-off">■ Стоп</button>
       </div>
       <div class="msg mono" id="rec-note-out"></div>
-      <details class="help"><summary>Что пишется</summary>
-        <div class="hint">Пишет ros2 bag в ~/pupper_data: суставы и IMU ~250 Гц, все команды с kp/kd, политику, cmd_vel. Изменения ползунков генератора во время записи сохраняются в meta.json. Одна запись — один режим и одно покрытие. ~360 МБ/час. Что и сколько писать — ai/rl/REAL_DATA.md.</div>
-      </details>
     </section>
 
     <section class="card wide" id="joints-sec">
@@ -550,11 +564,6 @@
           <tbody id="joints"></tbody>
         </table>
       </div>
-      <div class="hint">Ошибка = команда минус реальный угол. Если на одном суставе она всё время большая, а у остальных маленькая — этот мотор не держит (снят момент или не хватает силы). Момент — что мотор сам сообщает.</div>
-      <details class="help"><summary>Стойка и подгонка нулей</summary>
-        <div class="hint">В «Стойке» пульт поднимает kp отстающему суставу от 12 до 20 (жёлтый = уже поднят). Цель остаётся у стойки и не уезжает вслед за ногой. У задней левой в колене мотор слабее, поэтому ему потолок 40. Если момент долго красный, мотор греется: сними стойку.</div>
-        <div class="hint"><b>Подгонка нулей.</b> Ноль свой у каждого из 12 суставов: бедро (_1, вперёд-назад), отведение (_2, вбок) и колено (_3). Подними робота на подставку, нажми «Стойка», затем −2°/+2° на нужной строке. Бедро — наклон назад примерно на 40° от вертикали, колено — голень вперёд-вниз примерно на 30°, отведение — нога вертикально, лапа под плечом. «Записать» переносит в components.xacro каждую строку, где поправка не 0°. Потом перезапусти robot.service.</div>
-      </details>
       <div class="row" style="margin-top:10px">
         <button id="trim-save" class="primary">Записать поправки в components.xacro</button>
         <button id="trim-reset">Сбросить несохранённые</button>
@@ -678,9 +687,11 @@ function drawPose() {
   drawScene("pose");
   drawScene("demo-pose");
 }
+let demoViewMode = "tri"; // tri | motors
 function drawScene(canvasId) {
   const cam = cams[canvasId];
-  const demoView = canvasId === "demo-pose";
+  const demoView = canvasId === "demo-pose" && demoViewMode === "tri";
+  const showAllOnDemo = canvasId === "demo-pose" && demoViewMode === "motors";
   const showTri = demoView && $("demo-tri").checked;
   const demoLeg = $("demo-tri-leg").value;
   const [ctx, W, H] = sizeCanvas($(canvasId));
@@ -918,8 +929,20 @@ document.querySelectorAll(".pad button").forEach((b) => {
 $("stop").onclick = () => { held.clear(); paintPad(); api("/api/stop", {}); };
 $("estop").onclick = () => { held.clear(); paintPad(); api("/api/estop", {}); };
 $("gait-on").onclick = async () => { try { await api("/api/gait", { on: true }); flash("походка включается…"); } catch (e) { flash(e.message, "bad"); } };
-$("stand").onclick = async () => { try { await api("/api/stand", {}); flash("встаю в стойку за 3 с, где не хватает сил — добавлю…"); } catch (e) { flash(e.message, "bad"); } };
-$("revive").onclick = async () => { try { await api("/api/revive", {}); flash("Exit и Enter всем моторам, без хоуминга. Момент на долю секунды пропадёт."); } catch (e) { flash(e.message, "bad"); } };
+$("stand").onclick = async () => { try { await api("/api/stand", {}); flash("стойка"); } catch (e) { flash(e.message, "bad"); } };
+$("revive").onclick = async () => { try { await api("/api/revive", {}); flash("моторы оживлены"); } catch (e) { flash(e.message, "bad"); } };
+$("imu-pwr").onchange = async () => {
+  const on = $("imu-pwr").checked;
+  window._imuPwrHold = true;
+  try {
+    await api("/api/imu_power", { on });
+    flash(on ? "BNO: включаю питание (~1 с)…" : "BNO питание выкл");
+  } catch (e) {
+    flash(e.message, "bad");
+    $("imu-pwr").checked = !on;
+  }
+  setTimeout(() => { window._imuPwrHold = false; }, 2500);
+};
 // Таблица перерисовывается каждый кадр, click между mousedown и mouseup теряется.
 $("joints").addEventListener("pointerdown", async (e) => {
   const b = e.target.closest("button[data-trim]");
@@ -946,19 +969,19 @@ $("square").onclick = async () => {
 $("odom-reset").onclick = () => api("/api/odom_reset", {});
 
 const TG_SLIDERS = [
-  ["freq", "Как часто шагает, раз/с", 0.3, 3.0, 0.1],
-  ["stride", "Длина шага вперёд, м (0 = топчется)", 0.0, 0.06, 0.002],
-  ["lift", "Насколько поднимает лапу, м", 0.0, 0.06, 0.002],
-  ["height", "Выше/ниже корпус, м", -0.03, 0.03, 0.002],
-  ["swing", "Сколько времени лапа в воздухе", 0.3, 0.7, 0.05],
-  ["turn", "Поворот (+ налево, − направо)", -1.0, 1.0, 0.05],
-  ["kp", "Жёсткость суставов", 4, 40, 0.5],
-  ["kd", "Гашение дрожи суставов", 0.1, 1.0, 0.05],
+  ["freq", "Частота шага, раз/с", 0.3, 3.0, 0.1],
+  ["stride", "Длина шага, м", 0.0, 0.06, 0.002],
+  ["lift", "Подъём лапы, м", 0.0, 0.06, 0.002],
+  ["height", "Высота корпуса, м", -0.03, 0.03, 0.002],
+  ["swing", "Доля шага в воздухе", 0.3, 0.7, 0.05],
+  ["turn", "Поворот", -1.0, 1.0, 0.05],
+  ["kp", "Жёсткость kp", 4, 40, 0.5],
+  ["kd", "Гашение kd", 0.1, 1.0, 0.05],
 ];
 const TG_IMU_SLIDERS = [
-  ["imu_gain", "Ровнять корпус: сила", 0.0, 1.5, 0.05],
-  ["imu_ki", "Ровнять корпус: дожим", 0.0, 2.0, 0.05],
-  ["imu_damp", "Ровнять корпус: антираскачка", 0.0, 0.2, 0.005],
+  ["imu_gain", "Ровнять: сила", 0.0, 1.5, 0.05],
+  ["imu_ki", "Ровнять: дожим", 0.0, 2.0, 0.05],
+  ["imu_damp", "Ровнять: демпфер", 0.0, 0.2, 0.005],
 ];
 const sliderRow = ([id, label, lo, hi, st]) =>
   `<div class="row srow"><label>${label}</label><input id="tg-${id}" type="range" min="${lo}" max="${hi}" step="${st}"><span id="tg-${id}-v" class="mono"></span><span class="unit"></span></div>`;
@@ -970,7 +993,7 @@ for (const [id] of [...TG_SLIDERS, ...TG_IMU_SLIDERS]) {
     api("/api/tg_params", { [id]: Number($("tg-" + id).value) }).catch((e) => flash(e.message, "bad"));
   });
 }
-$("tg-on").onclick = async () => { try { await api("/api/tg", { on: true }); flash("генератор: еду в стойку, потом шаг"); } catch (e) { flash(e.message, "bad"); } };
+$("tg-on").onclick = async () => { try { await api("/api/tg", { on: true }); flash("генератор"); } catch (e) { flash(e.message, "bad"); } };
 $("tg-off").onclick = async () => { try { await api("/api/tg", { on: false }); } catch (e) { flash(e.message, "bad"); } };
 let tgInit = false;
 $("rec-on").onclick = async () => {
@@ -989,16 +1012,16 @@ for (const id of ["vmax", "vymax", "wmax", "scale"]) {
 // ---------- демонстрационный режим ----------
 // [id, подпись, множитель «единица сервера → экран», шаг на экране, единица]
 const DEMO_SLIDERS = [
-  ["height", "Нижнее ребро: плечо → лапа", 100, 0.1, "см", 1],
-  ["shift_x", "Середина ребра вперёд (+) / назад (−)", 100, 0.1, "см", 1],
-  ["spread", "Середина ребра в сторону", 100, 0.1, "см", 1],
-  ["anim_h", "Высота треугольника (подъём верха)", 100, 0.1, "см", 1],
-  ["anim_x", "Половина основания (вперёд и назад)", 100, 0.1, "см", 1],
-  ["anim_T", "Период обхода", 1, 0.5, "с", 1],
-  ["kp", "Жёсткость суставов kp", 1, 0.5, "", 1],
-  ["kd", "Гашение дрожи kd", 1, 0.05, "", 2],
-  ["ramp", "Время выезда в стойку", 1, 0.5, "с", 1],
-  ["follow", "Скорость отслеживания ползунка", 100, 0.1, "см/с", 1],
+  ["height", "Нижнее ребро", 100, 0.1, "см", 1],
+  ["shift_x", "Сдвиг ребра вперёд/назад", 100, 0.1, "см", 1],
+  ["spread", "Сдвиг ребра в сторону", 100, 0.1, "см", 1],
+  ["anim_h", "Высота треугольника", 100, 0.1, "см", 1],
+  ["anim_x", "Половина основания", 100, 0.1, "см", 1],
+  ["anim_T", "Период", 1, 0.5, "с", 1],
+  ["kp", "kp", 1, 0.5, "", 1],
+  ["kd", "kd", 1, 0.05, "", 2],
+  ["ramp", "Время выезда", 1, 0.5, "с", 1],
+  ["follow", "Скорость ползунка", 100, 0.1, "см/с", 1],
 ];
 const STAGE_RU = ["колено", "отведение", "бедро"];
 let demoInit = false;
@@ -1029,10 +1052,26 @@ function syncDemoValues(d) {
   pointCameraAtLeg();
 }
 function pointCameraAtLeg() {
-  // Смотрим на ногу со стороны её борта, чтобы она была ближе всего к камере.
-  cams["demo-pose"].az = $("demo-tri-leg").value.endsWith("_l") ? 1.35 : -1.35;
+  if (demoViewMode === "motors") {
+    cams["demo-pose"].az = -2.9;
+    cams["demo-pose"].el = 0.35;
+    cams["demo-pose"].dist = 0.75;
+  } else {
+    cams["demo-pose"].az = $("demo-tri-leg").value.endsWith("_l") ? 1.35 : -1.35;
+    cams["demo-pose"].el = 0.12;
+    cams["demo-pose"].dist = 0.4;
+  }
   drawPose();
 }
+document.querySelectorAll("[data-dview]").forEach((b) => {
+  b.onclick = () => {
+    demoViewMode = b.dataset.dview;
+    document.querySelectorAll("[data-dview]").forEach((x) => x.classList.toggle("active", x === b));
+    pointCameraAtLeg();
+    // Сразу же на HDMI, без отдельной кнопки «На экран».
+    api("/api/show_live", { mode: demoViewMode }).then(() => refreshScreen().catch(() => {})).catch((e) => screenMsg(e.message, false));
+  };
+});
 $("demo-tri").addEventListener("change", drawPose);
 $("demo-tri-labels").addEventListener("change", drawPose);
 $("demo-others").addEventListener("change", drawPose);
@@ -1216,7 +1255,7 @@ function renderOffsets(s) {
   $("off-readout").innerHTML =
     `<div class="tile"><span>Датчик, нос</span><b>${nose(imuNose)}</b></div>`
     + `<div class="tile"><span>Оффсет тангажа</span><b>${o.pitch_offset_deg == null ? "—" : Number(o.pitch_offset_deg).toFixed(1) + "°"}</b></div>`
-    + `<div class="tile"><span>Сеть видит нос</span><b>${seen == null ? "походка выкл" : nose(seen)}</b></div>`;
+    + `<div class="tile"><span>С оффсетом</span><b>${seen == null ? "выкл" : nose(seen)}</b></div>`;
 }
 for (const [id, key] of [["off-pitch", "pitch_offset_deg"], ["off-roll", "roll_offset_deg"]]) {
   $(id).addEventListener("input", () => {
@@ -1238,7 +1277,7 @@ function render() {
   pill($("svc"), "robot.service: " + s.service, s.service === "active" ? "ok" : "bad");
   const cm = s.controllers_age === null || s.controllers_age > 3;
   pill($("gait"), cm ? "контроллеры не отвечают" : s.gait ? "походка ВКЛ" : s.tg ? "ГЕНЕРАТОР" : s.demo.active ? "ДЕМО-СТОЙКА" : s.stand ? "СТОЙКА" : "походка выкл", cm ? "bad" : s.gait || s.stand || s.tg || s.demo.active ? "ok" : "warn");
-  pill($("nn-state"), cm ? "контроллеры не отвечают" : s.gait ? "нейросеть ведёт" : "нейросеть выкл", cm ? "bad" : s.gait ? "ok" : "");
+  pill($("nn-state"), cm ? "контроллеры не отвечают" : s.gait ? "походка вкл" : "походка выкл", cm ? "bad" : s.gait ? "ok" : "");
   renderDemo(s);
 
   if (!tgInit) {
@@ -1254,7 +1293,7 @@ function render() {
   $("tg-note").textContent = s.tg_note;
   pill($("rec-state"), s.record.active ? `● пишу ${f(s.record.t, 0)} с` : "не пишу", s.record.active ? "bad" : "");
   $("rec-note-out").textContent = s.record.note;
-  pill($("src"), "команды: " + s.mux_source, s.mux_source === "/llm_cmd_vel" ? "ok" : "");
+  pill($("src"), "команды: " + (s.mux_source === "/llm_cmd_vel" ? "пульт" : (s.mux_source || "?")), s.mux_source ? "ok" : "");
 
   if (!limitsInit) {
     for (const id of ["vmax", "vymax", "wmax", "scale"]) { $(id).value = s.limits[id]; $(id + "-v").textContent = s.limits[id]; }
@@ -1263,6 +1302,9 @@ function render() {
 
   const imu = s.imu;
   const imuMsg = [];
+  if (typeof s.imu_power === "boolean" && !window._imuPwrHold) {
+    $("imu-pwr").checked = s.imu_power;
+  }
   if (!imu) imuMsg.push(["bad", "нет сообщений /imu_sensor_broadcaster/imu"]);
   else {
     if (imu.age > 0.5) imuMsg.push(["bad", `датчик наклона молчит ${f(imu.age, 1)} с`]);
@@ -1274,7 +1316,7 @@ function render() {
       ["гиро x", f(imu.gyro[0], 3) + " рад/с"], ["гиро y", f(imu.gyro[1], 3) + " рад/с"],
       ["гиро z", f(imu.gyro[2], 3) + " рад/с"], ["задержка IMU", s.latency.imu === null ? "—" : f(s.latency.imu * 1000, 1) + " мс"],
       ["гравитация в корпусе", `${f(imu.gravity[0])}, ${f(imu.gravity[1])}, ${f(imu.gravity[2])}`],
-      ["её же видит политика", s.policy_gravity ? s.policy_gravity.map((v) => f(v)).join(", ") : "походка выкл"],
+      ["её же видит походка", s.policy_gravity ? s.policy_gravity.map((v) => f(v)).join(", ") : "выкл"],
     ]);
   }
   $("imu-msg").innerHTML = imuMsg.map(([c, t]) => `<div class="msg ${c}">${t}</div>`).join("");
@@ -1345,7 +1387,7 @@ function render() {
   $("cmd-kv").innerHTML = kv([
     ["в /cmd_vel сейчас", co ? `vx ${f(co[0])} vy ${f(co[1])} wz ${f(co[2])}` : "тишина"],
     ["ручное", s.manual ? "да" : "нет"],
-    ["задержка политики", s.latency.policy === null ? "—" : f(s.latency.policy * 1000, 1) + " мс"],
+    ["задержка походки", s.latency.policy === null ? "—" : f(s.latency.policy * 1000, 1) + " мс"],
     ["шагов в маршруте", String(s.mission.length)],
   ]);
   if (s.mission_note) { $("mission").textContent = s.mission_note; $("mission").className = "msg" + (s.mission_note.startsWith("АВАР") ? " bad" : ""); }
@@ -1355,6 +1397,108 @@ function render() {
   drawPose();
   drawMap();
 }
+
+
+// ---------- экран HDMI ----------
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+function screenMsg(text, ok = true) {
+  const el = $("screen-msg");
+  el.textContent = text || "";
+  el.className = "msg " + (text ? (ok ? "" : "bad") : "");
+}
+async function refreshScreen() {
+  const data = await api("/api/media");
+  const status = await api("/api/screen_status");
+  const list = $("screen-list");
+  if (!data.items.length) list.innerHTML = '<div class="hint" style="margin:0">Библиотека пуста</div>';
+  else list.innerHTML = data.items.map((item) => `
+    <div class="media-item ${item.id === data.current ? "active" : ""}">
+      <div>
+        <div class="name">${escapeHtml(item.name)}</div>
+        <div class="type">${({image:"фото",video:"видео",youtube:"YouTube"})[item.type] || item.type}</div>
+      </div>
+      <div class="row" style="margin:0">
+        <button class="sm primary" data-show="${item.id}">Показать</button>
+        <button class="sm" data-del="${item.id}">×</button>
+      </div>
+    </div>`).join("");
+  pill($("scr-state"), status.chromium ? "экран вкл" : "экран выкл", status.chromium ? "ok" : "");
+}
+$("pick-file").onclick = () => $("screen-file").click();
+$("screen-file").addEventListener("change", () => {
+  $("screen-upload").disabled = !$("screen-file").files[0];
+});
+$("screen-upload").onclick = async () => {
+  const f = $("screen-file").files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  $("screen-upload").disabled = true;
+  try {
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    await api("/api/show", { id: data.item.id });
+    $("screen-file").value = "";
+    screenMsg("показано на экране");
+    await refreshScreen();
+  } catch (e) { screenMsg(e.message, false); $("screen-upload").disabled = false; }
+};
+$("screen-yt-btn").onclick = async () => {
+  const url = $("screen-yt").value.trim();
+  if (!url) return;
+  try {
+    await api("/api/youtube", { url });
+    $("screen-yt").value = "";
+    screenMsg("добавлено");
+    await refreshScreen();
+  } catch (e) { screenMsg(e.message, false); }
+};
+$("screen-open").onclick = async () => {
+  try { await api("/api/open_screen", {}); await refreshScreen(); }
+  catch (e) { screenMsg(e.message, false); }
+};
+$("screen-stop").onclick = async () => {
+  try { await api("/api/screen_stop", {}); screenMsg("экран выкл"); await refreshScreen(); }
+  catch (e) { screenMsg(e.message, false); }
+};
+$("screen-list").addEventListener("click", async (ev) => {
+  const show = ev.target.getAttribute("data-show");
+  const del = ev.target.getAttribute("data-del");
+  if (show) { try { await api("/api/show", { id: show }); await refreshScreen(); } catch (e) { screenMsg(e.message, false); } }
+  if (del) { try { await fetch("/api/media/" + del, { method: "DELETE" }).then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.error); }); await refreshScreen(); } catch (e) { screenMsg(e.message, false); } }
+});
+refreshScreen();
+setInterval(() => refreshScreen().catch(() => {}), 4000);
+
+
+// ---------- VPN (Amnezia awg0) ----------
+async function refreshVpn() {
+  try {
+    const s = await api("/api/vpn");
+    pill($("vpn-state"), s.active ? "VPN вкл" : "VPN выкл", s.active ? "ok" : "");
+  } catch (_) {
+    pill($("vpn-state"), "VPN ?", "warn");
+  }
+}
+$("vpn-up").onclick = async () => {
+  try {
+    await api("/api/vpn", { on: true });
+    flash("VPN up");
+    await refreshVpn();
+  } catch (e) { flash(e.message, "bad"); }
+};
+$("vpn-down").onclick = async () => {
+  try {
+    await api("/api/vpn", { on: false });
+    flash("VPN down");
+    await refreshVpn();
+  } catch (e) { flash(e.message, "bad"); }
+};
+refreshVpn();
+setInterval(() => refreshVpn().catch(() => {}), 5000);
 
 async function poll() {
   let fresh = null;

@@ -447,20 +447,25 @@ hardware_interface::return_type ControlBoardHardwareInterface::read(
     //             imu_packet_timestamp_micros_, imu_measurement_timestamp_micros_,
     //             imu_time_since_measurement_micros_, imu_time_since_measurement_seconds_);
 
-    // Every sample is published. A fall used to fail quat-norm, gyro or age
-    // checks and the driver then froze the last pose, so the IMU looked dead.
-    tf2::Quaternion imu_quat(imu_output.quat.x(), imu_output.quat.y(), imu_output.quat.z(),
-                             imu_output.quat.w());
-    corrected_quat = imu_quat * imu_manager_.offset_quaternion.inverse();
-    if (corrected_quat.length2() > 1e-12) {
-      corrected_quat.normalize();
+    // Only publish orientation/gyro from a fresh sensor report.
+    // Stale last-known pose was shown as "live" while BNO was dead (control
+    // packets used to refresh the timestamp without new rotation vector).
+    constexpr double kMaxFreshAgeSec = 0.25;
+    if (imu_time_since_measurement_seconds_ >= 0.0 &&
+        imu_time_since_measurement_seconds_ < kMaxFreshAgeSec) {
+      tf2::Quaternion imu_quat(imu_output.quat.x(), imu_output.quat.y(), imu_output.quat.z(),
+                               imu_output.quat.w());
+      corrected_quat = imu_quat * imu_manager_.offset_quaternion.inverse();
+      if (corrected_quat.length2() > 1e-12) {
+        corrected_quat.normalize();
+      }
+
+      tf2::Vector3 imu_ang_vel(imu_output.gyro.x(), imu_output.gyro.y(), imu_output.gyro.z());
+      angular_velocity = imu_manager_.offset_rotation_matrix * imu_ang_vel;
+
+      tf2::Vector3 imu_acc(imu_output.acc.x(), imu_output.acc.y(), imu_output.acc.z());
+      linear_acceleration = imu_manager_.offset_rotation_matrix * imu_acc;
     }
-
-    tf2::Vector3 imu_ang_vel(imu_output.gyro.x(), imu_output.gyro.y(), imu_output.gyro.z());
-    angular_velocity = imu_manager_.offset_rotation_matrix * imu_ang_vel;
-
-    tf2::Vector3 imu_acc(imu_output.acc.x(), imu_output.acc.y(), imu_output.acc.z());
-    linear_acceleration = imu_manager_.offset_rotation_matrix * imu_acc;
   }
 
   // Updating the state interfaces with corrected values
@@ -1246,6 +1251,20 @@ void ControlBoardHardwareInterface::start_revive_listener() {
         RCLCPP_WARN(rclcpp::get_logger("ControlBoardHardwareInterface"),
                     "Оживление: Exit всем моторам, затем Enter. Хоуминга нет, момент пропадёт на долю секунды");
       });
+  imu_power_pub_ = revive_node_->create_publisher<std_msgs::msg::Bool>(
+      "/imu_power_state", rclcpp::QoS(1).reliable().transient_local());
+  imu_power_sub_ = revive_node_->create_subscription<std_msgs::msg::Bool>(
+      "/imu_power", rclcpp::QoS(1), [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+        imu_manager_.request_power(msg->data);
+        std_msgs::msg::Bool st;
+        st.data = msg->data;
+        imu_power_pub_->publish(st);
+      });
+  {
+    std_msgs::msg::Bool st;
+    st.data = imu_manager_.power_wanted();
+    imu_power_pub_->publish(st);
+  }
   // transient_local: страница пульта, открытая после хоуминга, сразу получает последний статус.
   homing_status_pub_ = revive_node_->create_publisher<std_msgs::msg::String>(
       "/motor_homing/status", rclcpp::QoS(1).reliable().transient_local());
@@ -1295,6 +1314,8 @@ void ControlBoardHardwareInterface::stop_revive_listener() {
     revive_executor_->remove_node(revive_node_);
   }
   revive_sub_.reset();
+  imu_power_sub_.reset();
+  imu_power_pub_.reset();
   rehome_sub_.reset();
   homing_status_pub_.reset();
   revive_executor_.reset();

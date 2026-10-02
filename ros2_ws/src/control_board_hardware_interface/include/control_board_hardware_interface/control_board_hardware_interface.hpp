@@ -23,6 +23,7 @@
 #include "rclcpp/executors/single_threaded_executor.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp/time.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -116,6 +117,8 @@ class ControlBoardHardwareInterface : public hardware_interface::SystemInterface
   std::atomic<int> revive_exit_frames_{0};
   rclcpp::Node::SharedPtr revive_node_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr revive_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr imu_power_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr imu_power_pub_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr revive_executor_;
   std::thread revive_thread_;
   // Повторный хоуминг по /motor_rehome [mode, delay_s]: подписка принимает, read() выполняет.

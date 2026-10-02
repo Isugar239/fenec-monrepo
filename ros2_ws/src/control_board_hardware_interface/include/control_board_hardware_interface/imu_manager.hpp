@@ -16,14 +16,18 @@
 
 #include "rt/rt_bno055.h"
 
+struct gpiod_line;
+
 #define IMU_I2C_DEVICE_NUMBER 1
+// P-MOS на VCC BNO: GPIO LOW = питание ВКЛ, HIGH = ВЫКЛ.
+#define IMU_PWR_GPIO_NAME "GPIO17"
 
 class IMUManager {
  public:
   // whether IMU is enabled on robot
   bool enabled;
 
-  // Latest copy of imu data (thread safe)
+  // Latest copy of imu data (thread safe). Identity + epoch stamp = нет свежих отчётов.
   BNO055::Output imu_data;
   uint32_t imu_sampling_time_us;
 
@@ -43,6 +47,10 @@ class IMUManager {
   // Thread-safe get imu data
   BNO055::Output get_imu_data();
 
+  // Питание BNO через GPIO17 (PNP/P-MOS, active-low). true = VCC вкл.
+  void request_power(bool on);
+  bool power_wanted() const { return power_wanted_.load(); }
+
  private:
   bool contains_nan(const Eigen::Quaternionf &q);
 
@@ -50,6 +58,14 @@ class IMUManager {
                                                                                   int delay_ms);
 
   void poll_imu();
+  void invalidate_imu_data();
+  bool open_power_gpio();
+  void close_power_gpio();
+  // active-low: true = VCC on
+  void set_imu_power(bool on);
+  void power_cycle_imu();
+  // Unbind I2C adapter → bitbang bus clear → bind → softReset в конструкторе BNO.
+  bool cycle_i2c_bus();
   void reopen();
 
   void imu_read_thread_fn();
@@ -68,4 +84,11 @@ class IMUManager {
   // Imu reader
   std::unique_ptr<BNO055> imu_ = nullptr;
   uint32_t micros_between_reports_ = 10000;
+
+  // MOSFET/PNP gate on GPIO17 (active-low power enable)
+  gpiod_line *pwr_line_ = nullptr;
+  std::atomic<bool> power_wanted_{true};
+  std::atomic<bool> power_apply_pending_{false};
+
+  void apply_power_if_pending();
 };
