@@ -52,7 +52,7 @@
 
 /* USER CODE BEGIN PV */
 CANRxMessage can1_rx, can2_rx;
-CANTxMessage a1_can, a2_can, h1_can, h2_can, k1_can, k2_can; //TX Messages
+CANTxMessage a1_can, a2_can, h1_can, h2_can, k1_can, k2_can; // команды шести приводам платы
 
 
 spi_data_t spi_data;       // data from spine to up
@@ -71,12 +71,28 @@ int counter = 0;
 /* Один полный кадр @6 МГц ~0.2 ms. 50 ms = оборванный/рассинхронный
  * трансфер, а не нормальная пауза между кадрами @~100 Гц. */
 #define SPI_XFER_TIMEOUT_MS 50u
+#define DIAG_REPLY_FRESH_MS 100u
+#define DIAG_ERROR_RECENT_MS 1000u
+#define MOTOR_CURRENT_FULL_SCALE 40.0f
+
+typedef struct
+{
+  uint32_t can_reply_ms[3];
+  uint32_t can_tx_error_ms;
+} leg_diagnostics_t;
+
+static leg_diagnostics_t leg_diagnostics[2];
+static uint32_t spi_valid_ms;
+static uint32_t spi_checksum_error_ms;
+static uint32_t spi_timeout_ms;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static void write_can_message(CAN_HandleTypeDef *can, CANTxMessage *message,
+                              uint32_t leg_index);
 
 /* USER CODE END PFP */
 
@@ -93,23 +109,20 @@ void PackAll()
 }
 void WriteAll()
 {
-	uint32_t TxMailbox1;
-	uint32_t TxMailbox2;
-
 //	EnterMotorMode(&a1_can);
-	HAL_CAN_AddTxMessage(&CAN_H1, &a1_can.tx_header, a1_can.data, &TxMailbox1);	// Send response
+	write_can_message(&CAN_H1, &a1_can, 0u);
 //    wait(.00002);
-	HAL_CAN_AddTxMessage(&CAN_H2, &a2_can.tx_header, a2_can.data, &TxMailbox2);	// Send response
-//    wait(.00002);
-
-	HAL_CAN_AddTxMessage(&CAN_H1, &h1_can.tx_header, h1_can.data, &TxMailbox1);	// Send response
-//    wait(.00002);
-	HAL_CAN_AddTxMessage(&CAN_H2, &h2_can.tx_header, h2_can.data, &TxMailbox2);	// Send response
+	write_can_message(&CAN_H2, &a2_can, 1u);
 //    wait(.00002);
 
-	HAL_CAN_AddTxMessage(&CAN_H1, &k1_can.tx_header, k1_can.data, &TxMailbox1);	// Send response
+	write_can_message(&CAN_H1, &h1_can, 0u);
 //    wait(.00002);
-	HAL_CAN_AddTxMessage(&CAN_H2, &k2_can.tx_header, k2_can.data, &TxMailbox2);	// Send response
+	write_can_message(&CAN_H2, &h2_can, 1u);
+//    wait(.00002);
+
+	write_can_message(&CAN_H1, &k1_can, 0u);
+//    wait(.00002);
+	write_can_message(&CAN_H2, &k2_can, 1u);
 //    wait(.00002);
 }
 uint32_t xor_checksum(uint32_t *data, size_t len)
@@ -119,6 +132,130 @@ uint32_t xor_checksum(uint32_t *data, size_t len)
         t = t ^ data[i];
     return t;
 }
+
+static int diag_recent(uint32_t now, uint32_t then, uint32_t window_ms)
+{
+    return then != 0u && (uint32_t)(now - then) <= window_ms;
+}
+
+void diag_record_can_reply(const leg_state *leg, uint8_t id)
+{
+    uint32_t leg_index;
+    if (leg == &l1_state)
+    {
+        leg_index = 0u;
+    }
+    else if (leg == &l2_state)
+    {
+        leg_index = 1u;
+    }
+    else
+    {
+        return;
+    }
+
+    if (id >= 1u && id <= 3u)
+    {
+        leg_diagnostics[leg_index].can_reply_ms[id - 1u] = HAL_GetTick();
+    }
+}
+
+static void diag_record_can_tx(uint32_t leg_index, HAL_StatusTypeDef status)
+{
+    if (status != HAL_OK)
+    {
+        leg_diagnostics[leg_index].can_tx_error_ms = HAL_GetTick();
+    }
+}
+
+static uint32_t diag_flags_for_leg(uint32_t leg_index)
+{
+    const uint32_t now = HAL_GetTick();
+    uint32_t flags = SPINE_DIAG_MAGIC;
+    for (uint32_t id = 0u; id < 3u; ++id)
+    {
+        if (diag_recent(now, leg_diagnostics[leg_index].can_reply_ms[id], DIAG_REPLY_FRESH_MS))
+        {
+            flags |= SPINE_DIAG_REPLY_ID1 << id;
+        }
+    }
+    if (diag_recent(now, leg_diagnostics[leg_index].can_tx_error_ms, DIAG_ERROR_RECENT_MS))
+    {
+        flags |= SPINE_DIAG_CAN_TX_ERROR;
+    }
+    if (diag_recent(now, spi_valid_ms, DIAG_REPLY_FRESH_MS))
+    {
+        flags |= SPINE_DIAG_SPI_VALID;
+    }
+    if (diag_recent(now, spi_checksum_error_ms, DIAG_ERROR_RECENT_MS))
+    {
+        flags |= SPINE_DIAG_SPI_CHECKSUM_ERROR;
+    }
+    if (diag_recent(now, spi_timeout_ms, DIAG_ERROR_RECENT_MS))
+    {
+        flags |= SPINE_DIAG_SPI_TIMEOUT;
+    }
+    if (enabled != 0)
+    {
+        flags |= SPINE_DIAG_MOTOR_MODE_ENABLED;
+    }
+    return flags;
+}
+
+static void diag_refresh_flags(void)
+{
+    spi_data.flags[0] = (int32_t)diag_flags_for_leg(0u);
+    spi_data.flags[1] = (int32_t)diag_flags_for_leg(1u);
+}
+
+static void set_motor_current_led(void)
+{
+    static uint32_t last_toggle_ms;
+    static GPIO_PinState led_state;
+    float max_current = fabsf(l1_state.a.t);
+    const float currents[] = {
+        l1_state.h.t, l1_state.k.t, l2_state.a.t, l2_state.h.t, l2_state.k.t
+    };
+    for (uint32_t i = 0u; i < sizeof(currents) / sizeof(currents[0]); ++i)
+    {
+        const float current = fabsf(currents[i]);
+        if (current > max_current)
+        {
+            max_current = current;
+        }
+    }
+
+    if (enabled == 0)
+    {
+        led_state = GPIO_PIN_RESET;
+        last_toggle_ms = HAL_GetTick();
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, led_state);
+        return;
+    }
+
+    if (max_current > MOTOR_CURRENT_FULL_SCALE)
+    {
+        max_current = MOTOR_CURRENT_FULL_SCALE;
+    }
+    /* 0.5 Hz at zero feedback current, up to 8 Hz at full-scale current. */
+    const uint32_t half_period_ms =
+        (uint32_t)(1000.0f / (1.0f + 15.0f * max_current / MOTOR_CURRENT_FULL_SCALE));
+    const uint32_t now = HAL_GetTick();
+    if ((uint32_t)(now - last_toggle_ms) >= half_period_ms)
+    {
+        led_state = led_state == GPIO_PIN_SET ? GPIO_PIN_RESET : GPIO_PIN_SET;
+        last_toggle_ms = now;
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, led_state);
+    }
+}
+
+static void write_can_message(CAN_HandleTypeDef *can, CANTxMessage *message, uint32_t leg_index)
+{
+    uint32_t mailbox;
+    diag_record_can_tx(leg_index,
+                       HAL_CAN_AddTxMessage(can, &message->tx_header, message->data, &mailbox));
+}
+
 int softstop_joint(joint_state state, joint_control *control, float limit_p, float limit_n)
 {
     if ((state.p) >= limit_p)
@@ -188,6 +325,12 @@ static int control(void)
     spi_data.qd_abad[1] = l2_state.a.v;
     spi_data.qd_hip[1] = l2_state.h.v;
     spi_data.qd_knee[1] = l2_state.k.v;
+    spi_data.i_abad[0] = l1_state.a.t;
+    spi_data.i_hip[0] = l1_state.h.t;
+    spi_data.i_knee[0] = l1_state.k.t;
+    spi_data.i_abad[1] = l2_state.a.t;
+    spi_data.i_hip[1] = l2_state.h.t;
+    spi_data.i_knee[1] = l2_state.k.t;
 
 //	led = 0;
 
@@ -230,8 +373,6 @@ static int control(void)
 	l2_control.k.kd = spi_command.kd_knee[1];
 	l2_control.k.t_ff = spi_command.tau_knee_ff[1];
 
-	spi_data.flags[0] = 0;
-	spi_data.flags[1] = 0;
 //	spi_data.flags[0] |= softstop_joint(l1_state.a, &l1_control.a, A_LIM_P, A_LIM_N);
 //	spi_data.flags[0] |= (softstop_joint(l1_state.h, &l1_control.h, H_LIM_P, H_LIM_N)) << 1;
 	//spi_data.flags[0] |= (softstop_joint(l1_state.k, &l1_control.k, K_LIM_P, K_LIM_N))<<2;
@@ -245,7 +386,7 @@ static int control(void)
 	//WriteAll();
 
 
-    spi_data.checksum = xor_checksum((uint32_t *)&spi_data, 14);
+    spi_data.checksum = xor_checksum((uint32_t *)&spi_data, 20);
     for (int i = 0; i < DATA_LEN; i++)
     {
         tx_buff[i] = ((uint16_t *)(&spi_data))[i];
@@ -266,7 +407,7 @@ static void spi_bus_recover(void)
 
 static void spi_refresh_tx_buff(void)
 {
-  spi_data.checksum = xor_checksum((uint32_t *)&spi_data, 14);
+  spi_data.checksum = xor_checksum((uint32_t *)&spi_data, 20);
   for (int i = 0; i < DATA_LEN; i++)
   {
     tx_buff[i] = ((uint16_t *)(&spi_data))[i];
@@ -279,6 +420,8 @@ void spi_isr(void)
       &hspi1, (uint8_t *)tx_buff, (uint8_t *)rx_buff, TX_LEN, SPI_XFER_TIMEOUT_MS);
   if (st != HAL_OK)
   {
+    spi_timeout_ms = HAL_GetTick();
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
     spi_bus_recover();
     return;
   }
@@ -292,7 +435,9 @@ void spi_isr(void)
   /* Битый пакет: не гоняем мусор в CAN. Только помечаем и обновляем TX. */
   if (calc_checksum != (uint32_t)spi_command.checksum)
   {
-    spi_data.flags[1] = 0xdead;
+    spi_checksum_error_ms = HAL_GetTick();
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
+    diag_refresh_flags();
     spi_refresh_tx_buff();
     return;
   }
@@ -303,6 +448,10 @@ void spi_isr(void)
     PackAll();
     WriteAll();
   }
+  spi_valid_ms = HAL_GetTick();
+  set_motor_current_led();
+  diag_refresh_flags();
+  spi_refresh_tx_buff();
 }
 /* USER CODE END 0 */
 

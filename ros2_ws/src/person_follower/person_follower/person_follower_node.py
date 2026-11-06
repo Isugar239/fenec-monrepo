@@ -16,7 +16,6 @@ class PersonFollowerNode(Node):
     def __init__(self):
         super().__init__("person_follower_node")
 
-        # Declare parameters
         self.declare_parameter("kp_angular", 2.0)
         self.declare_parameter("kp_linear", 1.5)
         self.declare_parameter("target_bbox_area", 0.25)
@@ -26,8 +25,10 @@ class PersonFollowerNode(Node):
         self.declare_parameter("angular_deadzone", 0.05)
         self.declare_parameter("linear_deadzone", 0.05)
         self.declare_parameter("detection_timeout", 2.0)
+        self.declare_parameter("target_class_ids", ["face"])
+        self.declare_parameter("image_width", 640)
+        self.declare_parameter("image_height", 640)
 
-        # Get parameters
         self.kp_angular = self.get_parameter("kp_angular").value
         self.kp_linear = self.get_parameter("kp_linear").value
         self.target_bbox_area = self.get_parameter("target_bbox_area").value
@@ -37,29 +38,24 @@ class PersonFollowerNode(Node):
         self.angular_deadzone = self.get_parameter("angular_deadzone").value
         self.linear_deadzone = self.get_parameter("linear_deadzone").value
         self.detection_timeout = self.get_parameter("detection_timeout").value
+        self.target_class_ids = self.get_parameter("target_class_ids").value
 
-        # State variables
         self.is_active = False
         self.last_detection = None
         self.last_detection_time = None
         self.current_twist = Twist()
 
-        # Image dimensions (will be inferred from detections)
-        self.image_width = 640  # Default, will be updated
-        self.image_height = 640  # Default, will be updated
+        self.image_width = self.get_parameter("image_width").value
+        self.image_height = self.get_parameter("image_height").value
 
-        # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, "/person_following_cmd_vel", 10)
 
-        # Subscribers
         self.detection_sub = self.create_subscription(Detection2DArray, "/detections", self.detection_callback, 10)
 
-        # Services
         self.activate_srv = self.create_service(Trigger, "activate_person_following", self.activate_callback)
 
         self.deactivate_srv = self.create_service(Trigger, "deactivate_person_following", self.deactivate_callback)
 
-        # Control timer
         self.control_timer = self.create_timer(1.0 / self.publish_rate, self.control_loop)
 
         self.get_logger().info("Person follower node initialized")
@@ -75,7 +71,6 @@ class PersonFollowerNode(Node):
     def deactivate_callback(self, request, response):
         """Handle deactivation service request."""
         self.is_active = False
-        # Stop the robot
         self.stop_robot()
         response.success = True
         response.message = "Person following deactivated"
@@ -87,29 +82,22 @@ class PersonFollowerNode(Node):
         if not msg.detections:
             return
 
-        # Find person detections (assuming class_id "0" is person in COCO)
         person_detections = []
         for detection in msg.detections:
             for result in detection.results:
-                if result.hypothesis.class_id == "0":
+                if result.hypothesis.class_id in self.target_class_ids:
                     person_detections.append(detection)
                     break
 
         if person_detections:
-            # Use the first person detection
             self.last_detection = person_detections[0]
             self.last_detection_time = time.time()
 
-            # Infer image dimensions from bounding box (assuming normalized coordinates)
-            # The hailo node publishes pixel coordinates, not normalized
-            # We'll assume 640x640 for now but this could be parameterized
-
     def control_loop(self):
-        """Main control loop for visual servoing."""
+        """Направлять корпус на последнюю свежую детекцию."""
         if not self.is_active:
             return
 
-        # Check for detection timeout
         if self.last_detection_time is None:
             self.get_logger().warn("No detections received yet", throttle_duration_sec=5.0)
             return
@@ -122,46 +110,37 @@ class PersonFollowerNode(Node):
         if self.last_detection is None:
             return
 
-        # Extract bounding box information
         bbox = self.last_detection.bbox
         bbox_center_x = bbox.center.position.x
         bbox_center_y = bbox.center.position.y
         bbox_width = bbox.size_x
         bbox_height = bbox.size_y
 
-        # Calculate image center (assuming 640x640 from hailo detection)
         image_center_x = self.image_width / 2.0
         image_center_y = self.image_height / 2.0
 
-        # Angular velocity control (yaw)
-        # Error is normalized to [-1, 1]
+        # Нормированная ошибка положения цели по горизонтали.
         angular_error = (bbox_center_x - image_center_x) / (self.image_width / 2.0)
 
-        # Apply deadzone
         if abs(angular_error) < self.angular_deadzone:
             angular_error = 0.0
 
-        # P control for angular velocity (negative for correct direction)
+        # Знак соответствует направлению оси камеры и yaw робота.
         wz = -self.kp_angular * angular_error
 
-        # Clamp angular velocity
         wz = max(-self.max_angular_vel, min(self.max_angular_vel, wz))
 
-        # Linear velocity control based on bounding box area
+        # Площадь bbox служит грубой оценкой расстояния до цели.
         bbox_area = (bbox_width * bbox_height) / (self.image_width * self.image_height)
         area_error = self.target_bbox_area - bbox_area
 
-        # Apply deadzone
         if abs(area_error) < self.linear_deadzone:
             area_error = 0.0
 
-        # P control for linear velocity
         vx = self.kp_linear * area_error
 
-        # Clamp linear velocity
         vx = max(-self.max_linear_vel, min(self.max_linear_vel, vx))
 
-        # Create and publish twist message
         twist = Twist()
         twist.linear.x = vx
         twist.linear.y = 0.0  # No lateral movement
@@ -173,7 +152,6 @@ class PersonFollowerNode(Node):
         self.cmd_vel_pub.publish(twist)
         self.current_twist = twist
 
-        # Log control info periodically
         self.get_logger().info(
             f"Control: vx={vx:.2f}, wz={wz:.2f}, bbox_area={bbox_area:.3f}, " f"angular_error={angular_error:.3f}",
             # throttle_duration_sec=1.0

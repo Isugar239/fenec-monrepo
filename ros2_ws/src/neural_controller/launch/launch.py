@@ -17,9 +17,6 @@ from launch.conditions import IfCondition, UnlessCondition
 
 
 def generate_launch_description():
-    #
-    # 1. Declare a boolean launch argument 'sim' that controls whether to run the robot in the simulator or not
-    #
     declare_sim_arg = DeclareLaunchArgument(
         name="sim",
         default_value="False",
@@ -66,9 +63,6 @@ def generate_launch_description():
         ),
     )
 
-    #
-    # 2. Construct the path to the URDF file using IfElseSubstitution
-
     xacro_file = PathJoinSubstitution(
         [
             FindPackageShare("pupper_v3_description"),
@@ -81,9 +75,6 @@ def generate_launch_description():
         ]
     )
 
-    #
-    # 3. Create the robot_description using xacro
-    #
     robot_description_content = Command(
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
@@ -99,9 +90,6 @@ def generate_launch_description():
         "robot_description": ParameterValue(robot_description_content, value_type=str)
     }
 
-    #
-    # 4. Robot State Publisher
-    #
     robot_state_publisher = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
@@ -109,23 +97,11 @@ def generate_launch_description():
         parameters=[robot_description],
     )
 
-    #
-    # 5. Common controller parameters
-    #
     node_parameters = ParameterFile(
         PathJoinSubstitution([FindPackageShare("neural_controller"), "launch", "config.yaml"]),
         allow_substs=True,
     )
 
-    #
-    # 6. Nodes from your original launch files
-    #
-    # joy_node = Node(
-    #     package="joy",
-    #     executable="joy_node",
-    #     parameters=[node_parameters],
-    #     output="both",
-    # )
     joy_linux_node = Node(
         package="joy_linux",
         executable="joy_linux_node",
@@ -303,11 +279,14 @@ def generate_launch_description():
         output="both",
     )
 
-    hailo_detection_node = Node(
-        package="hailo",
-        executable="hailo_detection",
+    glaz_detection_node = Node(
+        package="glaz_detect",
+        executable="glaz_detect_node",
+        name="glaz_detect_node",
         output="both",
-        parameters=[node_parameters],
+        remappings=[
+            ("/glaz_detect/detections", "/detections"),
+        ],
     )
 
     person_following_node = Node(
@@ -317,13 +296,9 @@ def generate_launch_description():
         parameters=[node_parameters],
     )
 
-    #
-    # 7. Put them all together
-    #
     spawners = [
         robot_controller_spawner,
         three_legged_robot_controller_spawner,
-        # Forward command controllers for animation
         forward_position_controller_spawner,
         forward_kp_controller_spawner,
         forward_kd_controller_spawner,
@@ -361,7 +336,6 @@ def generate_launch_description():
         spawners_now,
         foxglove_bridge,
         joy_util_node,
-        # joy_node,
         joy_linux_node,
         teleop_twist_joy_node,
         camera_node,
@@ -370,15 +344,10 @@ def generate_launch_description():
         imu_to_tf_node,
         animation_controller_py_node,
         joint_state_throttler,
-        # Detection
-        hailo_detection_node,
-        # Person following
+        glaz_detection_node,
         person_following_node,
     ]
 
-    #
-    # 8. Return the LaunchDescription with the declared arg + all nodes
-    #
     partial_motors_info = LogInfo(
         msg=[
             "Hardware mode: partial_motors=",

@@ -27,6 +27,7 @@ bool NeuralController::check_param_vector_size() {
       {"init_kps", params_.init_kps.size()},
       {"init_kds", params_.init_kds.size()},
       {"default_joint_pos", params_.default_joint_pos.size()},
+      {"joint_pos_bias", params_.joint_pos_bias.size()},
       {"joint_lower_limits", params_.joint_lower_limits.size()},
       {"joint_upper_limits", params_.joint_upper_limits.size()},
       {"joint_names", params_.joint_names.size()}};
@@ -38,7 +39,19 @@ bool NeuralController::check_param_vector_size() {
       return false;
     }
   }
+  for (double bias : params_.joint_pos_bias) {
+    if (bias < -0.8 || bias > 0.8) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+                   "joint_pos_bias value %.3f is outside -0.8..0.8 rad", bias);
+      return false;
+    }
+  }
   return true;
+}
+
+double NeuralController::nominal_joint_pos(int i) const {
+  double bias = params_.pose_mods ? params_.joint_pos_bias.at(i) : 0.0;
+  return params_.default_joint_pos.at(i) + bias;
 }
 
 controller_interface::CallbackReturn NeuralController::on_init() {
@@ -142,6 +155,26 @@ controller_interface::CallbackReturn NeuralController::on_init() {
     return controller_interface::CallbackReturn::ERROR;
   }
 
+  if (params_.pose_mods) {
+    RCLCPP_INFO(get_node()->get_logger(),
+                "pose_mods on. joint_pos_bias rad: %.2f %.2f %.2f | %.2f %.2f %.2f | %.2f %.2f %.2f "
+                "| %.2f %.2f %.2f",
+                params_.joint_pos_bias.at(0), params_.joint_pos_bias.at(1),
+                params_.joint_pos_bias.at(2), params_.joint_pos_bias.at(3),
+                params_.joint_pos_bias.at(4), params_.joint_pos_bias.at(5),
+                params_.joint_pos_bias.at(6), params_.joint_pos_bias.at(7),
+                params_.joint_pos_bias.at(8), params_.joint_pos_bias.at(9),
+                params_.joint_pos_bias.at(10), params_.joint_pos_bias.at(11));
+  } else {
+    RCLCPP_INFO(get_node()->get_logger(),
+                "pose_mods off. Crouch bias and roll/pitch offsets are not applied.");
+  }
+  RCLCPP_INFO(get_node()->get_logger(),
+              "Nominal stand rad: %.2f %.2f %.2f | %.2f %.2f %.2f | %.2f %.2f %.2f | %.2f %.2f %.2f",
+              nominal_joint_pos(0), nominal_joint_pos(1), nominal_joint_pos(2), nominal_joint_pos(3),
+              nominal_joint_pos(4), nominal_joint_pos(5), nominal_joint_pos(6), nominal_joint_pos(7),
+              nominal_joint_pos(8), nominal_joint_pos(9), nominal_joint_pos(10), nominal_joint_pos(11));
+
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -208,20 +241,19 @@ controller_interface::CallbackReturn NeuralController::on_activate(
   cmd_y_vel_ = 0.0;
   cmd_yaw_vel_ = 0.0;
 
-  // Initialize the observation vector
   observation_.resize(params_.observation_history * kSingleObservationSize, 0.0);
 
   RCLCPP_INFO(get_node()->get_logger(),
               "Policy orientation offset: roll %.2f deg, pitch %.2f deg. Positive pitch makes "
               "the network see the nose higher, so it lowers the nose.",
-              params_.roll_offset_deg, params_.pitch_offset_deg);
+              params_.pose_mods ? params_.roll_offset_deg : 0.0,
+              params_.pose_mods ? params_.pitch_offset_deg : 0.0);
 
-  // Set the gravity z-component in the initial observation vector
+  // До первого IMU-кадра считаем корпус горизонтальным.
   for (int i = 0; i < params_.observation_history; i++) {
     observation_.at(i * kSingleObservationSize + kGravityZIndx) = -1.0;
   }
 
-  // Initialize the command subscriber
   cmd_vel_subscriber_ = get_node()->create_subscription<geometry_msgs::msg::Twist>(
       "/cmd_vel", rclcpp::SystemDefaultsQoS(),
       [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
@@ -325,6 +357,12 @@ controller_interface::CallbackReturn NeuralController::on_deactivate(
 controller_interface::return_type NeuralController::update(const rclcpp::Time &time,
                                                            const rclcpp::Duration &period) {
   if (param_listener_->try_get_params(dynamic_params_)) {
+    if (dynamic_params_.pose_mods != params_.pose_mods) {
+      params_.pose_mods = dynamic_params_.pose_mods;
+      RCLCPP_INFO(get_node()->get_logger(),
+                  "pose_mods %s. Crouch bias and roll/pitch offsets %s.",
+                  params_.pose_mods ? "on" : "off", params_.pose_mods ? "applied" : "not applied");
+    }
     if (dynamic_params_.roll_offset_deg != params_.roll_offset_deg ||
         dynamic_params_.pitch_offset_deg != params_.pitch_offset_deg) {
       params_.roll_offset_deg = dynamic_params_.roll_offset_deg;
@@ -332,7 +370,8 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       RCLCPP_INFO(get_node()->get_logger(),
                   "Policy orientation offset: roll %.2f deg, pitch %.2f deg. Positive pitch makes "
                   "the network see the nose higher, so it lowers the nose.",
-                  params_.roll_offset_deg, params_.pitch_offset_deg);
+                  params_.pose_mods ? params_.roll_offset_deg : 0.0,
+                  params_.pose_mods ? params_.pitch_offset_deg : 0.0);
     }
     if (dynamic_params_.gain_multiplier != params_.gain_multiplier) {
       if (dynamic_params_.gain_multiplier < 0.0) {
@@ -347,6 +386,29 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
                     params_.kds.at(0) * params_.gain_multiplier);
       }
     }
+    if (dynamic_params_.joint_pos_bias != params_.joint_pos_bias) {
+      bool bias_ok = dynamic_params_.joint_pos_bias.size() == kActionSize;
+      for (double bias : dynamic_params_.joint_pos_bias) {
+        if (bias < -0.8 || bias > 0.8) {
+          bias_ok = false;
+        }
+      }
+      if (!bias_ok) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "Rejected joint_pos_bias. Need 12 values, each within -0.8..0.8 rad.");
+      } else {
+        params_.joint_pos_bias = dynamic_params_.joint_pos_bias;
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "joint_pos_bias rad: %.2f %.2f %.2f | %.2f %.2f %.2f | %.2f %.2f %.2f | %.2f "
+                    "%.2f %.2f",
+                    params_.joint_pos_bias.at(0), params_.joint_pos_bias.at(1),
+                    params_.joint_pos_bias.at(2), params_.joint_pos_bias.at(3),
+                    params_.joint_pos_bias.at(4), params_.joint_pos_bias.at(5),
+                    params_.joint_pos_bias.at(6), params_.joint_pos_bias.at(7),
+                    params_.joint_pos_bias.at(8), params_.joint_pos_bias.at(9),
+                    params_.joint_pos_bias.at(10), params_.joint_pos_bias.at(11));
+      }
+    }
   }
 
   // When started, return to the default joint positions
@@ -357,7 +419,7 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       // positions
       double interpolated_joint_pos =
           init_joint_pos_.at(i) * (1 - time_since_init / params_.init_duration) +
-          params_.default_joint_pos.at(i) * (time_since_init / params_.init_duration);
+          nominal_joint_pos(i) * (time_since_init / params_.init_duration);
       command_interfaces_map_.at(params_.joint_names.at(i))
           .at("position")
           .get()
@@ -486,8 +548,9 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     constexpr double kDegToRad = 0.017453292519943295;
     tf2::Quaternion q_imu(orientation_x, orientation_y, orientation_z, orientation_w);
     tf2::Quaternion q_offset;
-    q_offset.setRPY(params_.roll_offset_deg * kDegToRad, -params_.pitch_offset_deg * kDegToRad,
-                    0.0);
+    double roll_offset_deg = params_.pose_mods ? params_.roll_offset_deg : 0.0;
+    double pitch_offset_deg = params_.pose_mods ? params_.pitch_offset_deg : 0.0;
+    q_offset.setRPY(roll_offset_deg * kDegToRad, -pitch_offset_deg * kDegToRad, 0.0);
     tf2::Quaternion q = q_imu * q_offset;
     q.normalize();
     tf2::Matrix3x3 m(q);
@@ -502,42 +565,32 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     //   return controller_interface::return_type::OK;
     // }
 
-    // Fill the observation vector
-    // Angular velocity
     observation_.at(0) = (float)ang_vel_x;
     observation_.at(1) = (float)ang_vel_y;
     observation_.at(2) = (float)ang_vel_z;
-    // Projected gravity vector
     observation_.at(3) = (float)projected_gravity_vector[0];
     observation_.at(4) = (float)projected_gravity_vector[1];
     observation_.at(5) = (float)projected_gravity_vector[2];
-    // Velocity commands
     observation_.at(6) = (float)cmd_x_vel_;
     observation_.at(7) = (float)cmd_y_vel_;
     observation_.at(8) = (float)cmd_yaw_vel_;
-    // Orientation commands
     observation_.at(9) = (float)desired_world_z_in_body_frame_.getX();
     observation_.at(10) = (float)desired_world_z_in_body_frame_.getY();
     observation_.at(11) = (float)desired_world_z_in_body_frame_.getZ();
 
-    // Joint positions
     for (int i = 0; i < kActionSize; i++) {
-      // Only include the joint position in the observation if the action type
-      // is position
       if (params_.action_types.at(i) == "position") {
         RCLCPP_DEBUG(get_node()->get_logger(), "Attempting to read joint position for %s (index %d)", params_.joint_names.at(i).c_str(), i);
         float joint_pos =
             state_interfaces_map_.at(params_.joint_names.at(i)).at("position").get().get_value();
-        observation_.at(kJointPositionIdx + i) = joint_pos - params_.default_joint_pos.at(i);
+        observation_.at(kJointPositionIdx + i) = joint_pos - nominal_joint_pos(i);
       }
     }
   } catch (const std::out_of_range &e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to read states from hardware interface - std::out_of_range exception: %s", e.what());
     
-    // Check which interfaces are missing
     RCLCPP_ERROR(get_node()->get_logger(), "=== Debug Information ===");
     
-    // Check IMU interface
     if (state_interfaces_map_.find(params_.imu_sensor_name) == state_interfaces_map_.end()) {
       RCLCPP_ERROR(get_node()->get_logger(), "Missing IMU sensor interface: %s", params_.imu_sensor_name.c_str());
     } else {
@@ -552,7 +605,6 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       }
     }
     
-    // Check joint interfaces
     for (size_t i = 0; i < params_.joint_names.size(); i++) {
       const auto &joint_name = params_.joint_names.at(i);
       if (state_interfaces_map_.find(joint_name) == state_interfaces_map_.end()) {
@@ -565,7 +617,6 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
       }
     }
     
-    // List all available interfaces for debugging
     RCLCPP_ERROR(get_node()->get_logger(), "Available state interfaces:");
     for (const auto &[name, interfaces] : state_interfaces_map_) {
       std::string interface_list;
@@ -580,19 +631,16 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     return controller_interface::return_type::ERROR;
   }
 
-  // Clip the observation vector
   for (auto &obs : observation_) {
     obs = std::clamp(obs, static_cast<float>(-params_.observation_limit),
                      static_cast<float>(params_.observation_limit));
   }
 
-  // Check observation for NaNs
   if (contains_nan(observation_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "observation_ contains NaN");
     return controller_interface::return_type::ERROR;
   }
 
-  // Publish the observation
   if (rt_observation_publisher_->trylock()) {
     // TODO make a custom msg type with header
     // rt_observation_publisher_->msg_.header.stamp = time;
@@ -600,13 +648,10 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
     rt_observation_publisher_->unlockAndPublish();
   }
 
-  // Measure the time before policy inference
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  // Perform policy inference
   model_->forward(observation_.data());
 
-  // Measure the time after policy inference
   auto end_time = std::chrono::high_resolution_clock::now();
   auto inference_duration_us =
       std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
@@ -614,15 +659,12 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
               "Policy inference took %.2f ms\tIMU measurement age: %.3f ms",
               inference_duration_us / 1000.0, time_since_measurement_seconds * 1000.0);
 
-  // Shift the observation history to the right by kSingleObservationSize for the next control
-  // step https://en.cppreference.com/w/cpp/algorithm/rotate
+  // Освобождаем первые 36 значений под следующий кадр наблюдения.
   std::rotate(observation_.rbegin(), observation_.rbegin() + kSingleObservationSize,
               observation_.rend());
 
-  // Process the actions
   const float *policy_output = model_->getOutputs();
 
-  // Publish the policy output
   if (rt_policy_output_publisher_->trylock()) {
     rt_policy_output_publisher_->msg_.data.resize(kActionSize, 0.0);
     for (int i = 0; i < kActionSize; i++) {
@@ -635,7 +677,7 @@ controller_interface::return_type NeuralController::update(const rclcpp::Time &t
   for (int i = 0; i < kActionSize; i++) {
     float action = policy_output[i];
     float action_scale = params_.action_scales.at(i);
-    float default_joint_pos = params_.default_joint_pos.at(i);
+    float default_joint_pos = static_cast<float>(nominal_joint_pos(i));
     float lower_limit = params_.joint_lower_limits.at(i);
     float upper_limit = params_.joint_upper_limits.at(i);
 
