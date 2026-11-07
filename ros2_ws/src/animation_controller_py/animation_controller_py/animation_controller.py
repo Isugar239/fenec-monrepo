@@ -184,7 +184,7 @@ class AnimationControllerPy(Node):
 
     def animation_gains(self) -> tuple[np.ndarray, np.ndarray]:
         if self.current_animation_name == "jump":
-            return np.full(self.ACTION_SIZE, 12.0), np.full(self.ACTION_SIZE, 0.55)
+            return np.full(self.ACTION_SIZE, 20.0), np.full(self.ACTION_SIZE, 1.0)
         if self.current_animation_name == "rear_sit":
             return np.full(self.ACTION_SIZE, 10.0), np.full(self.ACTION_SIZE, 0.5)
         return self.kps, self.kds
