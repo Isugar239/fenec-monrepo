@@ -286,6 +286,8 @@ JOY_SQUARE = 3
 JOY_L1 = 4
 JOY_R1 = 5
 JOY_R2 = 7
+JOY_L2_AXIS = 2
+JOY_L2_THRESHOLD = 0.9
 # R2: отпускать уши только после удержания
 JOY_R2_HOLD_S = 0.5
 JOY_SQUARE_HOLD_S = 0.5
@@ -303,7 +305,7 @@ LIGHTBAR_EFFORT_FULL_SCALE_NM = 3.0
 SPEED_MODES = (
     ("eco", "Eco", 0.75, 0.5, 2.0, (0, 255, 0)),
     ("comfort", "Comfort", 1.5, 1.0, 3.0, (0, 128, 255)),
-    ("sport", "Sport", 3.0, 2.0, 6.0, (190, 0, 255)),
+    ("sport", "Sport", 2.25, 2.0, 6.0, (190, 0, 255)),
 )
 SPEED_MODE_FLASH_SECONDS = 1.0 / 3.0
 
@@ -478,6 +480,7 @@ class Dashboard(Node):
         self.joy_r2_off = False
         self.joy_square_since: float | None = None
         self.joy_square_fired = False
+        self.joy_l2_rear = False
         self.prefs_lock = threading.Lock()
         self.prefs_timer: threading.Timer | None = None
         self.tg_note = ""
@@ -793,8 +796,14 @@ class Dashboard(Node):
         prev = self.joy_prev
         self.joy_prev = buttons
         now = time.monotonic()
+        l2_rear = (
+            JOY_L2_AXIS < len(msg.axes)
+            and msg.axes[JOY_L2_AXIS] >= JOY_L2_THRESHOLD
+        )
         r2 = JOY_R2 < len(buttons) and bool(buttons[JOY_R2])
         square = JOY_SQUARE < len(buttons) and bool(buttons[JOY_SQUARE])
+        with self.lock:
+            self.joy_l2_rear = l2_rear
         if not r2:
             self.joy_r2_since = None
             self.joy_r2_off = False
@@ -1815,7 +1824,12 @@ class Dashboard(Node):
                     self.trail.append((round(self.x, 3), round(self.y, 3)))
 
             cmd = None
-            if now - self.manual_t < MANUAL_TIMEOUT:
+            if self.joy_l2_rear and gait:
+                if self.mission:
+                    self.mission.clear()
+                self.mission_note = "L2: максимальный ход вперёд"
+                cmd = (SPEED_MODES[2][2], 0.0, 0.0)
+            elif now - self.manual_t < MANUAL_TIMEOUT:
                 if self.mission:
                     self.mission.clear()
                     self.mission_note = "маршрут отменён: ручное управление"
