@@ -22,13 +22,13 @@ class AnimationControllerPy(Node):
         [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
     )
     JUMP_CROUCH = np.array(
-        [0.062, 0.0, -0.158, -0.062, 0.0, 0.158, 0.062, 0.0, -0.158, -0.062, 0.0, 0.158]
+        [0.016, 0.0, -0.077, -0.016, 0.0, 0.077, 0.016, 0.0, -0.077, -0.016, 0.0, 0.077]
     )
     JUMP_EXTEND = np.array(
-        [0.525, 0.0, -1.020, -0.525, 0.0, 1.020, 0.525, 0.0, -1.020, -0.525, 0.0, 1.020]
+        [0.624, 0.0, -1.211, -0.624, 0.0, 1.211, 0.624, 0.0, -1.211, -0.624, 0.0, 1.211]
     )
     REAR_SIT = np.array(
-        [0.446, 0.0, -0.870, -0.446, 0.0, 0.870, 0.016, 0.0, -0.077, -0.016, 0.0, 0.077]
+        [0.35, 0.0, -1.10, -0.35, 0.0, 1.10, -0.65, 0.0, 0.90, 0.65, 0.0, -0.90]
     )
 
     def __init__(self):
@@ -170,17 +170,24 @@ class AnimationControllerPy(Node):
         """Small simulated jump: crouch, fast extension, then return to stand."""
         return np.vstack(
             (
-                self._blend(self.DEFAULT_STAND, self.JUMP_CROUCH, 32),
-                np.repeat(self.JUMP_CROUCH[None, :], 8, axis=0),
-                self._blend(self.JUMP_CROUCH, self.JUMP_EXTEND, 6),
-                np.repeat(self.JUMP_EXTEND[None, :], 8, axis=0),
-                self._blend(self.JUMP_EXTEND, self.DEFAULT_STAND, 32),
+                self._blend(self.DEFAULT_STAND, self.JUMP_CROUCH, 29),
+                np.repeat(self.JUMP_CROUCH[None, :], 6, axis=0),
+                self._blend(self.JUMP_CROUCH, self.JUMP_EXTEND, 5),
+                np.repeat(self.JUMP_EXTEND[None, :], 6, axis=0),
+                self._blend(self.JUMP_EXTEND, self.DEFAULT_STAND, 25),
             )
         )
 
     def _rear_sit_animation(self) -> np.ndarray:
         """Lower the rear of the body and leave the controller holding that pose."""
         return self._blend(self.DEFAULT_STAND, self.REAR_SIT, 60)
+
+    def animation_gains(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.current_animation_name == "jump":
+            return np.full(self.ACTION_SIZE, 12.0), np.full(self.ACTION_SIZE, 0.55)
+        if self.current_animation_name == "rear_sit":
+            return np.full(self.ACTION_SIZE, 10.0), np.full(self.ACTION_SIZE, 0.5)
+        return self.kps, self.kds
 
     def load_animation_csv(self, name: str, csv_path: str) -> bool:
         """Load animation data from a CSV file using pandas."""
@@ -368,7 +375,8 @@ class AnimationControllerPy(Node):
                 target_positions = keyframes[min(current_frame_index, len(keyframes) - 1)]
 
             # Publish commands
-            self.publish_commands(target_positions, self.kps, self.kds)
+            kps, kds = self.animation_gains()
+            self.publish_commands(target_positions, kps, kds)
 
     def publish_commands(self, positions: np.ndarray, kps: np.ndarray, kds: np.ndarray):
         """Publish position, kp, and kd commands to forward controllers."""
