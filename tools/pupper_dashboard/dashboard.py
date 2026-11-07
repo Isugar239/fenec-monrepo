@@ -648,8 +648,20 @@ class Dashboard(Node):
     def _set_lightbar(self, red: int, green: int, blue: int) -> None:
         """Установить RGB lightbar DualSense через драйвер hid-playstation."""
         rgb = (red, green, blue)
-        if self.lightbar_dir is None or not os.path.isdir(self.lightbar_dir):
-            lightbars = glob.glob("/sys/class/leds/input*:rgb:indicator")
+        lightbar_value = (
+            None if self.lightbar_dir is None
+            else f"{self.lightbar_dir}/multi_intensity"
+        )
+        if (
+            lightbar_value is None
+            or not os.path.isdir(self.lightbar_dir)
+            or not os.access(lightbar_value, os.W_OK)
+        ):
+            lightbars = [
+                path
+                for path in glob.glob("/sys/class/leds/input*:rgb:indicator")
+                if os.access(f"{path}/multi_intensity", os.W_OK)
+            ]
             self.lightbar_dir = lightbars[0] if len(lightbars) == 1 else None
             self.lightbar_rgb = None
         if self.lightbar_dir is None or rgb == self.lightbar_rgb:
