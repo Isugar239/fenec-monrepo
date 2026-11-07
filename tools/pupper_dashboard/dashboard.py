@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Пульт Фенека. Открыть в браузере: http://<ip-робота>:8091
-
-Работает рядом с robot.service, SPI не трогает: только ROS-топики и сервисы.
-Скорость шлёт в /llm_cmd_vel — джойстик в cmd_vel_mux главнее и перебивает пульт.
-Экран HDMI тоже обслуживается здесь (раньше был отдельный сервис на :8090).
+"""
 
   source /opt/ros/jazzy/setup.bash
   source ~/pupperv3-monorepo/ros2_ws/install/local_setup.bash
@@ -25,7 +21,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import sys
 
+import cv2
+import numpy as np
 import rclpy
+import zmq
 from controller_manager_msgs.srv import ListControllers, SwitchController
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import Log
@@ -36,18 +35,24 @@ from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
-from sensor_msgs.msg import Imu, JointState
+from sensor_msgs.msg import CompressedImage, Imu, JointState, Joy, JoyFeedback, JoyFeedbackArray
 from std_msgs.msg import Empty, Float32, Float32MultiArray, Float64MultiArray, String, Bool
 from tf2_ros import Buffer, TransformListener
 
 PORT = 8091
+EAR_POSE_ENDPOINT = "ipc:///run/user/1000/pupper-ears.sock"
 HERE = os.path.dirname(os.path.abspath(__file__))
+# prefs: vmax/уши, лежат вне репо
+PREFS_PATH = os.path.expanduser("~/.config/pupper-dashboard/prefs.json")
+# Превью в пульте: меньше JPEG + меньше FPS → меньше очередь по сети.
+CAM_PREVIEW_MAX_W = 480
+CAM_PREVIEW_FPS = 8.0
+CAM_JPEG_QUALITY = 45
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 from open_loop_gait import GaitIK, smooth  # noqa: E402
 from pupper_kinematics import LEG_INDEX, Kinematics  # noqa: E402
-from pupper_record import Recorder  # noqa: E402
 import screen_ctl  # noqa: E402
 
 VPN_UNIT = "awg-quick@awg0.service"
@@ -83,7 +88,7 @@ JOINTS = [
 ]
 DEFAULT_POS = [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
 LEGS = ["front_r", "front_l", "back_r", "back_l"]
-# Точка лапы в кадре leg_*_3 (foot_site из mujoco_xml).
+# лапа в кадре leg_*_3
 FOOT = {
     "front_r": (0.06231, -0.06216, 0.018),
     "front_l": (0.06231, 0.06216, 0.018),
@@ -95,29 +100,26 @@ GAIT = "neural_controller"
 POLICY_CONTROLLERS = ("neural_controller", "neural_controller_three_legged")
 POLICY_OFFSETS = ("roll_offset_deg", "pitch_offset_deg")
 FORWARD = ["forward_position_controller", "forward_kp_controller", "forward_kd_controller"]
-# Стойка без нейросети. ПД считает сам мотор: момент ≈ kp·(цель − угол), поэтому
-# «добавить момент» = поднять kp и/или увести цель дальше (интегральная добавка).
+# стойка без политики
 STAND_KP = 12.0
-STAND_KP_MAX = 20.0  # не выше kp_max в components.xacro, иначе железо обрежет
-# На шину этому суставу уходит удвоенный kp, не выше своего kp_max.
-# leg_front_l_2: 8.8° против 1.3° у заднего левого отведения.
+STAND_KP_MAX = 20.0  # потолок kp_max в xacro
+# слабое отведение: удвоенный kp
 STAND_KP_MAX_JOINT = {"leg_front_l_2": 40.0}
 WEAK_KP_SCALE = 2.0
 WEAK_JOINTS = {name: JOINTS.index(name) for name in STAND_KP_MAX_JOINT}
-STAND_KP_RATE = 4.0  # на сколько kp растёт за секунду, пока сустав не дотягивает
+STAND_KP_RATE = 4.0  # kp/с при ошибке
 STAND_KD_PER_KP = 0.033
-STAND_KI = 1.5  # рад добавки в секунду на радиан ошибки
+STAND_KI = 1.5
 STAND_I_MAX = 0.6
 STAND_ERR_OK = 0.06
-STAND_RELAX = 3.0  # с, за сколько добавка спадает в e раз, когда сустав в допуске
+STAND_RELAX = 3.0  # спад интеграла, с
 STAND_RAMP = 3.0
 TRIM_MAX = 1.6
 XACRO = os.path.join(
     os.path.dirname(os.path.dirname(HERE)),
     "ros2_ws/src/pupper_v3_description/description/components.xacro",
 )
-# Генератор траекторий (рысь без нейросети): траектории лап в метрах + обратная
-# кинематика по URDF, см. tools/open_loop_gait.py. Поверх — удержание корпуса по IMU.
+# рысь без политики (open_loop_gait + IMU)
 TG_DT = 0.02
 TG_TO_STAND = 2.5
 TG_RAMP = 1.5
@@ -134,35 +136,24 @@ TG_LIMITS = {
     "imu_ki": (0.0, 2.0),
     "imu_damp": (0.0, 0.2),
 }
-# Медленная рысь, которая реально сдвигается с места: stride 2 см часто буксовал,
-# 6 см + IMU (запись 20260929_191137) уводили ЗП колено в −3.4 рад и валили набок.
-# IMU-баланс всегда включён. Накопление почти выключено — иначе интегратор качает шаг.
+# рабочие дефолты рыси; imu_ki маленький — иначе качает
 TG_DEFAULTS = {
     "freq": 0.9, "stride": 0.032, "lift": 0.028, "height": 0.0, "swing": 0.5, "turn": 0.0,
     "kp": 12.0, "kd": 0.55,
     "imu_on": True, "imu_gain": 0.2, "imu_ki": 0.05, "imu_damp": 0.05,
 }
-TG_IMU_TAU = 0.15  # с, сглаживание углов IMU: колебания корпуса от шага не должны раскачивать ноги
-TG_IMU_STALE = 0.2  # с без сообщений IMU — коррекции нет, шаг гасится
-TG_IMU_I_MAX = 0.15  # рад, предел интегральной части (раньше 0.3 — слишком много на шаге)
-TG_DZ_MAX = 0.015  # м, предел поправки высоты одной лапы (±1.5 см; ±3 см ломали IK)
-POSE_GROUND_Z = -0.14  # м, пол модели в кадре корпуса (не «под самой нижней лапой»)
-# Удержание рысканья. Курс — тот, с которого начался шаг. Ошибка > 0 значит ушёл влево
-# (рысканье против часовой), а turn > 0 в генераторе — тоже влево, поэтому знак минус.
+TG_IMU_TAU = 0.15  # сглаживание IMU, с
+TG_IMU_STALE = 0.2  # без IMU гасим шаг
+TG_IMU_I_MAX = 0.15
+TG_DZ_MAX = 0.015  # м, поправка высоты лапы
+POSE_GROUND_Z = -0.14  # пол в кадре корпуса, м
+# удержание курса: минус — turn и ошибка yaw в одну сторону
 TG_YAW_KP = 1.2
 TG_YAW_KI = 0.6
 TG_YAW_KD = 0.08
 TG_YAW_I_MAX = 0.35
 TG_YAW_MAX = 0.45
-# Демонстрационный режим: треугольник обратной кинематики ОДНОЙ ноги. Выбранная нога
-# (плечо → колено → лапа) двигается по параметрам треугольника, остальные три стоят в обычной
-# стойке. Положение лапы задаётся в метрах от стойки, углы считает IK по URDF
-# (open_loop_gait.GaitIK.pose_offsets).
-# Траектория — как в Stanford CS123 Lab 3 (ролик «Inverse Kinematics and Trajectory Tracking»):
-# лапа идёт по рёбрам треугольника вперёд-низ → назад-низ → верх. В лабораторной
-# углы (±5 см, низ на 12 см под плечом, верх на 6 см выше низа). Верх на 6 см
-# упирает колено в ограничитель, поэтому по умолчанию низ опущен на DEMO_TRI_DROP,
-# а высота треугольника 4 см: это самый высокий такой треугольник, который колено ещё достаёт.
+# демо: треугольник IK одной ноги (вперёд-низ → назад-низ → верх)
 DEMO_BASE_KEYS = ("height", "shift_x", "spread")
 DEMO_LIMITS = {
     "shift_x": (-0.03, 0.03),
@@ -175,21 +166,16 @@ DEMO_LIMITS = {
     "ramp": (1.0, 8.0),
     "follow": (0.005, 0.10),
 }
-# Удлинение ноги относительно стойки (+ лапа ниже). Дальше +3 см колено выпрямляется,
-# выше −2.5 см колено упирается в ограничитель (KNEE_MARGIN в open_loop_gait.py), IK промахивается.
+# пределы удлинения ноги относительно стойки
 DEMO_EXT = (-0.025, 0.03)
-DEMO_TRI_DROP = 0.02  # насколько нижнее ребро ниже обычной стойки, м
+DEMO_TRI_DROP = 0.02  # низ треугольника ниже стойки, м
 DEMO_DEFAULTS = {
     "leg": "front_r", "height": None, "shift_x": 0.0, "spread": 0.0,
     "anim_h": 0.04, "anim_x": 0.05, "anim_T": 4.5,
     "kp": 12.0, "kd": 0.4, "ramp": 3.0, "follow": 0.03,
 }
-DEMO_ANIM_FADE = 1.5  # с на плавный вход и «погашение» анимации
-# Уши: hobby-сервы, значение от −1 до 1.
-# Сигнал — аппаратный ШИМ RP1: GPIO 12 = канал 0 (физ. контакт 32), GPIO 13 = канал 1 (контакт 33).
-# Программный импульс сюда не ставим: он дрожит, серва не держит ноль и греется.
-# Края A и B задаются ползунками. Анимация только ходит между этими числами.
-# swap 0: левое на 12, правое на 13. swap 1: наоборот.
+DEMO_ANIM_FADE = 1.5
+# уши: hw PWM GPIO12/13, −1..1; soft PWM греет сервы
 EAR_CHANNELS = {12: 0, 13: 1}
 EAR_PERIOD_NS = 20_000_000
 EAR_MODES = ("zero", "a", "b", "sync", "mirror", "alt")
@@ -223,7 +209,7 @@ def _sysfs_write(path: str, text: str) -> None:
 
 
 def _ear_pwm_chip() -> str:
-    """Чип pwm@98000, который включает dtoverlay=pwm-2chan на GPIO 12 и 13."""
+    """pwmchip для dtoverlay=pwm-2chan."""
     found = []
     for chip in sorted(glob.glob("/sys/class/pwm/pwmchip*")):
         dev = os.path.realpath(os.path.join(chip, "device"))
@@ -243,7 +229,7 @@ def _ear_pwm_chip() -> str:
 
 
 class _HwPwm:
-    """Один канал аппаратного ШИМ. value от −1 до 1, None — канал выключен, импульса нет."""
+    """Канал hw PWM. None = импульс снят."""
 
     def __init__(self, chip: str, channel: int, gpio: int) -> None:
         self.chip = chip
@@ -263,7 +249,7 @@ class _HwPwm:
                 time.sleep(0.02)
         for name in ("enable", "period", "duty_cycle", "polarity"):
             _sysfs_chmod(os.path.join(self.path, name))
-        # Сначала гасим канал: иначе ядро не даёт сменить period, если duty больше нового периода.
+        # enable=0 до смены period
         _sysfs_write(os.path.join(self.path, "enable"), "0")
         _sysfs_write(os.path.join(self.path, "period"), str(EAR_PERIOD_NS))
         _sysfs_write(os.path.join(self.path, "duty_cycle"), "0")
@@ -272,8 +258,7 @@ class _HwPwm:
         self._duty = None
 
     def detach(self) -> None:
-        # enable=0 обрывает импульс сразу. Канал не освобождаем: пин остаётся в функции ШИМ,
-        # но импульсов нет, серва обмякает.
+        # импульс снять, unexport не трогаем
         if self.value is None and self._duty is None:
             return
         _sysfs_write(os.path.join(self.path, "enable"), "0")
@@ -282,7 +267,7 @@ class _HwPwm:
 
     def set(self, value: float) -> None:
         value = clamp(value, -1.0, 1.0)
-        # −1 → 500 мкс, 0 → 1500 мкс, +1 → 2500 мкс.
+        # −1..1 → 500..2500 мкс
         duty = int(round(1_500_000 + value * 1_000_000))
         duty = int(clamp(duty, 500_000, 2_500_000))
         if self._duty == duty and self.value is not None:
@@ -293,17 +278,32 @@ class _HwPwm:
             _sysfs_write(os.path.join(self.path, "enable"), "1")
         self.value = value
         self._duty = duty
-REHOME_MODES = {"rear_first": 0.0, "all": 1.0}
-REHOME_ACK_TIMEOUT = 6.0
+ROBOT_UNIT = "robot.service"
+# /joy: круг/треуг/квадрат/R1/R2 (крест — joy_util)
+JOY_CIRCLE = 1
+JOY_TRIANGLE = 2
+JOY_SQUARE = 3
+JOY_L1 = 4
+JOY_R1 = 5
+JOY_R2 = 7
+# R2: отпускать уши только после удержания
+JOY_R2_HOLD_S = 0.5
+# ждать /motor_homing/status после restart
+REHOME_ACK_TIMEOUT = 60.0
 CMD_TOPIC = "/llm_cmd_vel"
 MANUAL_TIMEOUT = 0.35
 CTRL_DT = 0.05
-# IMU, /joint_states и /tf приходят по ~250 Гц. В rclpy каждое сообщение через
-# executor — пробуждение и пересборка wait set на Python: это целое ядро Pi.
-# Поэтому эти подписки живут на узле, который никто не спинит, а таймер раз в
-# POLL_DT забирает накопившееся пачкой. Не реже TG_DT: tg_step балансирует по IMU.
+# тяжёлые топики (~250 Гц) — на poll_node, читаем пачкой раз в POLL_DT
 POLL_DT = 0.02
 HISTORY_SECONDS = 12.0
+FALL_ALARM_ANGLE = math.radians(90.0)
+LIGHTBAR_EFFORT_FULL_SCALE_NM = 3.0
+SPEED_MODES = (
+    ("eco", "Eco", 0.75, 0.5, 2.0, (0, 255, 0)),
+    ("comfort", "Comfort", 1.5, 1.0, 3.0, (0, 128, 255)),
+    ("sport", "Sport", 3.0, 2.0, 6.0, (190, 0, 255)),
+)
+SPEED_MODE_FLASH_SECONDS = 1.0 / 3.0
 
 
 def quat_rotate(q, v):
@@ -339,13 +339,12 @@ def imu_identity(q) -> bool:
 
 
 def imu_usable(q, age: float) -> bool:
-    """False только когда сообщений нет. Наклон и единичный кватернион не отключают IMU."""
+    """Есть свежий IMU."""
     return q is not None and age <= TG_IMU_STALE
 
 
 def read_homing() -> dict:
-    # Журнал забит логом политики (50 Гц), поиск по всему запуску идёт минутами.
-    # Хоуминг — первые пару минут после старта сервиса, ищем только там.
+    # хоуминг только в начале запуска сервиса
     started_us = subprocess.run(
         ["systemctl", "show", "robot.service", "-p", "ActiveEnterTimestampMonotonic", "--value"],
         capture_output=True,
@@ -405,6 +404,11 @@ class Dashboard(Node):
         self.imu_hist: deque = deque()
         self.imu_rate_count = 0
         self.imu_rate = 0.0
+        self.fall_alarm = False
+        self.fall_rumble_on = False
+        lightbars = glob.glob("/sys/class/leds/input*:rgb:indicator")
+        self.lightbar_dir = lightbars[0] if len(lightbars) == 1 else None
+        self.lightbar_rgb: tuple[int, int, int] | None = None
 
         self.joint_pos = [None] * 12
         self.joint_vel = [None] * 12
@@ -432,15 +436,15 @@ class Dashboard(Node):
         self.mission_note = ""
         self.sending = False
         self.stand: dict | None = None
-        # Поправка к стойке: сустав физически стоит правильно при pos = DEFAULT_POS + trim.
+        # trim к DEFAULT_POS
         self.trim = [0.0] * 12
-        # Уже записано в xacro, но robot.service ещё не перезапущен — нули те же.
+        # trim, уже в xacro (до restart ещё старые нули)
         self.trim_saved = [0.0] * 12
         self.trim_note = ""
         self.tg: dict | None = None
         self.tg_params = dict(TG_DEFAULTS)
         self.tg_gait = GaitIK(Kinematics.from_xacro())
-        # Отдельный решатель: у него своё приближение IK, генератор его не сбивает.
+        # свой IK, отдельно от генератора
         self.demo_ik = GaitIK(self.tg_gait.kin)
         self.demo_ik_lock = threading.Lock()
         self.demo: dict | None = None
@@ -454,20 +458,35 @@ class Dashboard(Node):
         self.ear_servos = None
         self.ear_params = dict(EAR_DEFAULTS)
         self.ear_mode: str | None = None
+        self.ear_pose = (None, None)
+        self.ear_pose_dirty = False
+        self.ear_pose_context = zmq.Context()
+        self.ear_pose_pub = self.ear_pose_context.socket(zmq.PUB)
+        self.ear_pose_pub.set_hwm(1)
+        self.ear_pose_pub.bind(EAR_POSE_ENDPOINT)
         self.ear_phase = 0.0
         self.ear_t_last = 0.0
         self.ear_note = ""
         self.ear_err = ""
         self.homing_status: dict | None = None
         self.rehome_req: dict | None = None
-        self.recorder = Recorder()
-        self.rec_t0 = 0.0
-        self.rec_note = ""
+        self.joy_prev: list[int] | None = None
+        self.joy_busy = False
+        self.joy_r2_since: float | None = None
+        self.joy_r2_off = False
+        self.prefs_lock = threading.Lock()
+        self.prefs_timer: threading.Timer | None = None
         self.tg_note = ""
-        self.vmax = 0.30
-        self.vymax = 0.20
-        self.wmax = 1.0
+        self.speed_mode_index = 1
+        self.speed_mode_pending = False
+        self.speed_mode_flash_until = 0.0
+        self.speed_mode_flash_rgb = (0, 0, 0)
+        self.vmax = SPEED_MODES[self.speed_mode_index][2]
+        self.vymax = SPEED_MODES[self.speed_mode_index][3]
+        self.wmax = SPEED_MODES[self.speed_mode_index][4]
+        self.speed_mode_restore_pending = False
         self.odom_scale = 1.0
+        self._load_prefs()
 
         self.x = 0.0
         self.y = 0.0
@@ -478,16 +497,26 @@ class Dashboard(Node):
         self.log: deque = deque(maxlen=60)
         self.homing = {"when": None, "rows": [], "notes": ["читаю журнал…"]}
         self.service = "?"
+        self.camera_jpeg: bytes | None = None
+        self.camera_t = 0.0
+        self.camera_rx_t = 0.0
+        self.camera_enc_t = 0.0
+        self.camera_bytes = 0
+        self.detection_jpeg: bytes | None = None
+        self.detection_t = 0.0
+        self.detection_rx_t = 0.0
+        self.detection_enc_t = 0.0
+        self.detection_bytes = 0
+        self.camera_cond = threading.Condition(self.lock)
 
         self.poll_node = Node("pupper_dashboard_poll")
         self.tf_buffer = Buffer()
-        # Глубина очереди /tf (100) и IMU (50) должна покрывать 250 Гц × POLL_DT с запасом,
-        # иначе теряются кадры TF и занижается imu_rate.
+        # очередь под 250 Гц
         self.tf_listener = TransformListener(self.tf_buffer, self.poll_node)
         self.imu_sub = self.poll_node.create_subscription(
             Imu, "/imu_sensor_broadcaster/imu", lambda _msg: None, 50
         )
-        # Глубина 1: нужно только последнее значение.
+        # только последнее
         self.latest_subs = [
             self.poll_node.create_subscription(JointState, "/joint_states", self.on_joints, 1),
             self.poll_node.create_subscription(
@@ -502,7 +531,14 @@ class Dashboard(Node):
             self.poll_node.create_subscription(
                 Float32, "/neural_controller/imu_latency_seconds", self.on_lat_imu, 1
             ),
+            self.poll_node.create_subscription(
+                CompressedImage, "/camera/image_raw/compressed", self.on_camera, 1
+            ),
+            self.poll_node.create_subscription(
+                CompressedImage, "/glaz_detect/annotated/compressed", self.on_detection_camera, 1
+            ),
         ]
+        self.create_subscription(Joy, "/joy", self.on_joy, 10)
         self.create_subscription(Twist, "/cmd_vel", self.on_cmd_out, 10)
         self.create_subscription(String, "/cmd_vel_mux/active_source", self.on_mux, 10)
         self.create_subscription(Log, "/rosout", self.on_log, 50)
@@ -513,10 +549,10 @@ class Dashboard(Node):
         self.fwd_pubs = [
             self.create_publisher(Float64MultiArray, f"/{name}/commands", 10) for name in FORWARD
         ]
-        self.rehome_pub = self.create_publisher(Float32MultiArray, "/motor_rehome", 10)
         self.imu_power_pub = self.create_publisher(Bool, "/imu_power", 10)
+        self.joy_feedback_pub = self.create_publisher(JoyFeedbackArray, "/joy/set_feedback", 10)
         self.imu_power_on = True
-        # transient_local, как у издателя: пульт, открытый после запуска, сразу видит итог хоуминга.
+        # transient_local — статус хоуминга и опоздавшим
         self.create_subscription(
             String, "/motor_homing/status", self.on_homing_status,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL),
@@ -535,15 +571,19 @@ class Dashboard(Node):
             name: self.create_client(SetParameters, f"/{name}/set_parameters")
             for name in POLICY_CONTROLLERS
         }
+        self.teleop_set = self.create_client(
+            SetParameters, "/teleop_twist_joy_node/set_parameters"
+        )
 
+        self.create_timer(0.5, self._restore_speed_mode)
         self.create_timer(POLL_DT, self.drain_topics)
         self.create_timer(CTRL_DT, self.control_step)
-        self.create_timer(TG_DT, self.tg_step)
         self.create_timer(TG_DT, self.demo_step)
         self.create_timer(TG_DT, self.ear_step)
         self.create_timer(1.0, self.poll_controllers)
         self.create_timer(2.0, self.poll_policy_offsets)
         self.create_timer(1.0, self.count_rates)
+        self.create_timer(0.05, self.fall_rumble_step)
         threading.Thread(target=self.system_loop, daemon=True).start()
 
     # --- подписки -------------------------------------------------------
@@ -554,7 +594,7 @@ class Dashboard(Node):
         return None if got is None else got[0]
 
     def drain_topics(self) -> None:
-        # IMU забираем сырыми байтами: считаем все (для imu_rate), разбираем только последнее.
+        # IMU: считаем все, парсим последнее
         last, count = None, 0
         while (raw := self._take(self.imu_sub, True)) is not None:
             last, count = raw, count + 1
@@ -579,13 +619,71 @@ class Dashboard(Node):
             self.imu_gyro = g
             if self.yaw0 is None:
                 self.yaw0 = euler(q)[2]
-            # Порог 1.5·POLL_DT: в график идёт каждый второй опрос (25 Гц) даже при дрожании таймера.
+            # ~25 Гц в историю
             if not self.imu_hist or now - self.imu_hist[-1][0] >= 1.5 * POLL_DT:
                 r, p, y = euler(q)
                 self.imu_hist.append((now, math.degrees(r), math.degrees(p), math.degrees(y), *g))
                 while self.imu_hist and now - self.imu_hist[0][0] > HISTORY_SECONDS:
                     self.imu_hist.popleft()
             self.imu_t = now
+
+    def _joy_rumble(self, intensity: float) -> None:
+        """Вибрация DualSense через установленный joy_linux_node."""
+        msg = JoyFeedbackArray()
+        feedback = JoyFeedback()
+        feedback.type = JoyFeedback.TYPE_RUMBLE
+        feedback.id = 0
+        feedback.intensity = float(clamp(intensity, 0.0, 1.0))
+        msg.array = [feedback]
+        self.joy_feedback_pub.publish(msg)
+
+    def _set_lightbar(self, red: int, green: int, blue: int) -> None:
+        """Установить RGB lightbar DualSense через драйвер hid-playstation."""
+        rgb = (red, green, blue)
+        if self.lightbar_dir is None or rgb == self.lightbar_rgb:
+            return
+        with open(f"{self.lightbar_dir}/multi_intensity", "w", encoding="ascii") as file:
+            file.write(f"{red} {green} {blue}\n")
+        with open(f"{self.lightbar_dir}/brightness", "w", encoding="ascii") as file:
+            file.write("255\n")
+        self.lightbar_rgb = rgb
+
+    def fall_rumble_step(self) -> None:
+        """Индицировать падение непрерывной вибрацией и красным светом."""
+        now = time.monotonic()
+        with self.lock:
+            q = self.imu_q
+            fresh = q is not None and now - self.imu_t <= TG_IMU_STALE
+            if fresh:
+                roll, pitch, _ = euler(q)
+                alarm = abs(roll) >= FALL_ALARM_ANGLE or abs(pitch) >= FALL_ALARM_ANGLE
+            else:
+                alarm = False
+            changed = alarm != self.fall_alarm
+            self.fall_alarm = alarm
+            if alarm:
+                self.fall_rumble_on = True
+                intensity = 1.0
+            else:
+                was_rumbling = self.fall_rumble_on
+                self.fall_rumble_on = False
+                if not changed and not was_rumbling:
+                    intensity = None
+                else:
+                    intensity = 0.0
+            estimated_effort = max(
+                (abs(effort) for effort in self.joint_eff if effort is not None and math.isfinite(effort)),
+                default=0.0,
+            )
+        if intensity is not None:
+            self._joy_rumble(intensity)
+        if alarm:
+            self._set_lightbar(255 if int(now * 4.0) % 2 == 0 else 0, 0, 0)
+        elif now < self.speed_mode_flash_until:
+            self._set_lightbar(*self.speed_mode_flash_rgb)
+        else:
+            blue = round(255.0 * min(estimated_effort / LIGHTBAR_EFFORT_FULL_SCALE_NM, 1.0))
+            self._set_lightbar(0, 0, blue)
 
     def on_joints(self, msg: JointState) -> None:
         with self.lock:
@@ -601,6 +699,52 @@ class Dashboard(Node):
     def on_pos_cmd(self, msg: Float32MultiArray) -> None:
         with self.lock:
             self.pos_cmd = list(msg.data)
+
+    def on_camera(self, msg: CompressedImage) -> None:
+        self._store_preview(msg, "camera")
+
+    def on_detection_camera(self, msg: CompressedImage) -> None:
+        self._store_preview(msg, "detection")
+
+    def _store_preview(self, msg: CompressedImage, kind: str) -> None:
+        now = time.monotonic()
+        with self.camera_cond:
+            setattr(self, f"{kind}_rx_t", now)
+            if now - getattr(self, f"{kind}_enc_t") < 1.0 / CAM_PREVIEW_FPS:
+                return
+        if now - getattr(self, f"{kind}_enc_t") < 1.0 / CAM_PREVIEW_FPS:
+            return
+        raw = np.frombuffer(msg.data, dtype=np.uint8)
+        img = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+        if img is None:
+            self.get_logger().warn("%s: не разобрал JPEG", kind)
+            return
+        h, w = img.shape[:2]
+        if w > CAM_PREVIEW_MAX_W:
+            nh = max(1, int(round(h * (CAM_PREVIEW_MAX_W / float(w)))))
+            img = cv2.resize(img, (CAM_PREVIEW_MAX_W, nh), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(
+            ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), CAM_JPEG_QUALITY]
+        )
+        if not ok:
+            self.get_logger().warn("%s: cv2.imencode не смог сжать превью", kind)
+            return
+        jpeg = buf.tobytes()
+        with self.camera_cond:
+            setattr(self, f"{kind}_jpeg", jpeg)
+            setattr(self, f"{kind}_bytes", len(jpeg))
+            setattr(self, f"{kind}_t", now)
+            setattr(self, f"{kind}_enc_t", now)
+            self.camera_cond.notify_all()
+
+    def preview_frame(self, kind: str, wait: float = 0.0) -> tuple[bytes | None, float]:
+        with self.camera_cond:
+            if wait > 0.0 and getattr(self, f"{kind}_jpeg") is None:
+                self.camera_cond.wait(timeout=wait)
+            jpeg = getattr(self, f"{kind}_jpeg")
+            stamp = getattr(self, f"{kind}_t")
+            age = 0.0 if stamp <= 0.0 else time.monotonic() - stamp
+            return jpeg, age
 
     def on_obs(self, msg: Float32MultiArray) -> None:
         with self.lock:
@@ -620,8 +764,125 @@ class Dashboard(Node):
     def on_mux(self, msg: String) -> None:
         self.mux_source = msg.data
 
+    def on_joy(self, msg: Joy) -> None:
+        buttons = [int(b) for b in msg.buttons]
+        prev = self.joy_prev
+        self.joy_prev = buttons
+        now = time.monotonic()
+        r2 = JOY_R2 < len(buttons) and bool(buttons[JOY_R2])
+        if not r2:
+            self.joy_r2_since = None
+            self.joy_r2_off = False
+        elif self.joy_r2_since is None:
+            self.joy_r2_since = now
+        elif not self.joy_r2_off and now - self.joy_r2_since >= JOY_R2_HOLD_S:
+            self.joy_r2_off = True
+            self.ears_off()
+            self.get_logger().info("джойстик R2: уши отпущены")
+        if prev is None:
+            return
+
+        def rose(i: int) -> bool:
+            return i < len(buttons) and i < len(prev) and not prev[i] and buttons[i]
+
+        # □ стойка  ○ демо  △ хоуминг  L1 скорость  R1 уши  R2 hold=off
+        if rose(JOY_SQUARE):
+            self._joy_run("стойка", self.set_stand)
+        elif rose(JOY_CIRCLE):
+            self._joy_run("кручение лапы", lambda: self.api_demo_anim(True))
+        elif rose(JOY_TRIANGLE):
+            self._joy_run("хоуминг", self.api_demo_homing)
+        elif rose(JOY_L1):
+            self._cycle_speed_mode()
+        elif rose(JOY_R1):
+            threading.Thread(target=self._joy_ears_on, daemon=True).start()
+
+    def _joy_run(self, name: str, fn) -> None:
+        with self.lock:
+            if self.joy_busy:
+                return
+            self.joy_busy = True
+
+        def work() -> None:
+            try:
+                err = fn()
+                self.get_logger().info("джойстик %s: %s" % (name, err or "ок"))
+            finally:
+                with self.lock:
+                    self.joy_busy = False
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _joy_ears_on(self) -> None:
+        err = self.api_ears("sync")
+        self.get_logger().info("джойстик R1 уши: %s" % (err or "ок"))
+
+    def _cycle_speed_mode(self) -> None:
+        with self.lock:
+            if self.speed_mode_pending:
+                return
+            mode_index = (self.speed_mode_index + 1) % len(SPEED_MODES)
+        self._set_speed_mode(mode_index, flash=True, origin="L1")
+
+    def _restore_speed_mode(self) -> None:
+        with self.lock:
+            if not self.speed_mode_restore_pending or self.speed_mode_pending:
+                return
+            mode_index = self.speed_mode_index
+        self._set_speed_mode(mode_index, flash=False, origin="восстановление")
+
+    def _set_speed_mode(self, mode_index: int, flash: bool, origin: str) -> None:
+        name, label, vx, vy, yaw, rgb = SPEED_MODES[mode_index]
+        if not self.teleop_set.service_is_ready():
+            if origin == "L1":
+                self.get_logger().error("L1: teleop_twist_joy_node не отвечает")
+            return
+        with self.lock:
+            self.speed_mode_pending = True
+        request = SetParameters.Request()
+        request.parameters = []
+        for parameter_name, value in (
+            ("scale_linear.x", vx),
+            ("scale_linear.y", vy),
+            ("scale_angular.yaw", yaw),
+        ):
+            parameter = Parameter()
+            parameter.name = parameter_name
+            parameter.value.type = ParameterType.PARAMETER_DOUBLE
+            parameter.value.double_value = value
+            request.parameters.append(parameter)
+        future = self.teleop_set.call_async(request)
+        future.add_done_callback(
+            lambda result: self._on_speed_mode_set(
+                result, mode_index, name, label, vx, vy, yaw, rgb, flash, origin
+            )
+        )
+
+    def _on_speed_mode_set(
+        self, future, mode_index: int, name: str, label: str, vx: float, vy: float, yaw: float,
+        rgb: tuple[int, int, int], flash: bool, origin: str,
+    ) -> None:
+        response = future.result()
+        if not all(result.successful for result in response.results):
+            with self.lock:
+                self.speed_mode_pending = False
+            self.get_logger().error("L1: %s отклонён teleop_twist_joy_node", label)
+            return
+        with self.lock:
+            self.speed_mode_pending = False
+            self.speed_mode_index = mode_index
+            self.vmax, self.vymax, self.wmax = vx, vy, yaw
+            self.speed_mode_restore_pending = False
+            if flash:
+                self.speed_mode_flash_rgb = rgb
+                self.speed_mode_flash_until = time.monotonic() + SPEED_MODE_FLASH_SECONDS
+        self._remember()
+        self.get_logger().warn(
+            f"{origin}: {label} ({name}), лимиты {vx:.2f}/{vy:.2f}/{yaw:.2f}"
+        )
+
     def on_homing_status(self, msg: String) -> None:
-        # Поле state: running / done / none (хоуминг при запуске не выполнялся).
+        # state: running|done|none
         data = json.loads(msg.data)
         data["rx_t"] = time.monotonic()
         with self.lock:
@@ -632,8 +893,8 @@ class Dashboard(Node):
                     req["acked"] = True
                 if req["acked"] and data["state"] == "done":
                     self.rehome_req = None
-                    self.demo_note = "хоуминг завершён" + (
-                        ": без нуля " + ", ".join(data["skipped"]) if data["skipped"] else ": все суставы нашли ноль"
+                    self.demo_note = "хоуминг ок" if not data["skipped"] else (
+                        "хоуминг: без нуля " + ", ".join(data["skipped"])
                     )
 
     def on_imu_power_state(self, msg: Bool) -> None:
@@ -680,7 +941,7 @@ class Dashboard(Node):
         if self._offset_get_pending or not client.service_is_ready():
             if not client.service_is_ready():
                 with self.lock:
-                    self.policy_offsets_note = "контроллер ещё без этих параметров: после сборки перезапусти robot.service"
+                    self.policy_offsets_note = "нет параметров оффсета — пересобери и restart robot.service"
             return
         req = GetParameters.Request()
         req.names = list(POLICY_OFFSETS)
@@ -698,13 +959,13 @@ class Dashboard(Node):
             return
         if len(res.values) != len(POLICY_OFFSETS):
             with self.lock:
-                self.policy_offsets_note = "запущенный контроллер собран без оффсетов: перезапусти robot.service после сборки"
+                self.policy_offsets_note = "контроллер без оффсетов — пересобери и restart"
             return
         values = {}
         for name, value in zip(POLICY_OFFSETS, res.values):
             if value.type != ParameterType.PARAMETER_DOUBLE:
                 with self.lock:
-                    self.policy_offsets_note = "запущенный контроллер собран без оффсетов: перезапусти robot.service после сборки"
+                    self.policy_offsets_note = "контроллер без оффсетов — пересобери и restart"
                 return
             values[name] = value.double_value
         with self.lock:
@@ -742,7 +1003,7 @@ class Dashboard(Node):
                 return f"{controller}: {failed[0]}"
             wrote.append(controller)
         if GAIT not in wrote:
-            return "neural_controller не запущен. Сначала перезапусти robot.service после сборки"
+            return "neural_controller не запущен"
         with self.lock:
             self.policy_offsets.update({p.name: p.value.double_value for p in params})
             self.policy_offsets_note = ""
@@ -752,7 +1013,7 @@ class Dashboard(Node):
 
     def switch(self, activate: list[str], deactivate: list[str]) -> str | None:
         if not self.switch_cli.wait_for_service(timeout_sec=2.0):
-            return "controller_manager не отвечает — robot.service запущен?"
+            return "controller_manager не отвечает"
         req = SwitchController.Request()
         req.activate_controllers = activate
         req.deactivate_controllers = deactivate
@@ -764,7 +1025,7 @@ class Dashboard(Node):
         if not done.wait(5.0):
             return "switch_controller не ответил за 5 с"
         if not fut.result().ok:
-            return "controller_manager отказал в переключении (смотри журнал ниже)"
+            return "switch_controller отказал"
         self.poll_controllers()
         return None
 
@@ -784,12 +1045,12 @@ class Dashboard(Node):
     def set_stand(self) -> str | None:
         with self.lock:
             if any(p is None for p in self.joint_pos):
-                return "нет /joint_states — не знаю, откуда плавно ехать"
+                return "нет /joint_states"
             start = list(self.joint_pos)
             active = [n for n, s in self.controllers.items() if s == "active"]
             self.tg = None
             self.demo = None
-        self.stop_motion("стойка без нейросети")
+        self.stop_motion("стойка")
         self._publish_forward(start, [STAND_KP] * 12, [STAND_KP * STAND_KD_PER_KP] * 12)
         others = [n for n in active if n not in FORWARD and "broadcaster" not in n]
         err = self.switch(FORWARD, others)
@@ -813,18 +1074,18 @@ class Dashboard(Node):
                     return "генератор и так выключен"
                 if self.tg["stop_t"] is None:
                     self.tg["stop_t"] = time.monotonic()
-                self.tg_note = "останавливаюсь: шаг плавно гаснет, потом стойка"
+                self.tg_note = "гашу шаг → стойка"
             return None
         with self.lock:
             if any(p is None for p in self.joint_pos):
-                return "нет /joint_states — не знаю, откуда плавно ехать"
+                return "нет /joint_states"
             if self.tg is not None:
                 return "генератор уже идёт"
             start = list(self.joint_pos)
             active = [n for n, s in self.controllers.items() if s == "active"]
             self.stand = None
             self.demo = None
-        self.stop_motion("генератор траекторий: без нейросети, корпус по IMU")
+        self.stop_motion("генератор")
         p = self.tg_params
         self._publish_forward(start, [p["kp"]] * 12, [p["kd"]] * 12)
         others = [n for n in active if n not in FORWARD and "broadcaster" not in n]
@@ -842,7 +1103,7 @@ class Dashboard(Node):
                 "yaw_ref": None, "yaw": None, "yaw_i": 0.0, "yaw_turn": 0.0,
             }
             self.tg_params["imu_on"] = True
-            self.tg_note = "еду в стойку, потом шаг плавно набирается"
+            self.tg_note = "в стойку, потом шаг"
         return None
 
     # --- демонстрационный режим -----------------------------------------
@@ -855,48 +1116,40 @@ class Dashboard(Node):
     def _homed_error(self) -> str | None:
         h = self.homing_status
         if h is None:
-            return ("статус хоуминга неизвестен: нажми «Хоуминг». Если статус так и не придёт — "
-                    "control_board_hardware_interface собран без /motor_rehome: пересобери и перезапусти robot.service")
+            return "нет статуса хоуминга"
         if h["state"] == "running":
-            return "хоуминг ещё идёт"
+            return "хоуминг идёт"
         if h["state"] != "done":
-            return "при запуске сервиса хоуминга не было — нажми «Хоуминг»"
+            return "хоуминга не было"
         if h["skipped"]:
-            return "суставы без нуля, момента на них нет: " + ", ".join(h["skipped"])
+            return "без нуля: " + ", ".join(h["skipped"])
         return None
 
-    def api_demo_homing(self, body: dict) -> str | None:
-        mode = REHOME_MODES.get(body.get("mode"))
-        if mode is None:
-            return f"режим хоуминга: {' или '.join(REHOME_MODES)}"
-        delay = clamp(float(body.get("delay", 1.5)), 0.0, 10.0)
+    def api_demo_homing(self) -> str | None:
+        """Хоуминг через restart robot.service."""
         with self.lock:
             now = time.monotonic()
             req = self.rehome_req
-            # Хоуминг ограничен 90 с; без ответа за REHOME_ACK_TIMEOUT запрос считаем потерянным.
-            lost = req is not None and (now - req["t"] > 150.0 or (not req["acked"] and now - req["t"] > REHOME_ACK_TIMEOUT))
+            # таймаут restart+хоуминг
+            lost = req is not None and now - req["t"] > REHOME_ACK_TIMEOUT + 90.0
             if req is not None and not lost:
-                return "запрос хоуминга уже отправлен"
-            st = self.homing_status
-            if st is not None and st["state"] == "running" and not lost:
-                return "хоуминг уже идёт"
-            seq0 = None if st is None else st["seq"]
-            # Хоуминг занимает цикл контроллеров, а после него старые команды не должны дёрнуть ноги.
-            active = [n for n, s in self.controllers.items() if s == "active" and "broadcaster" not in n]
+                return "перезапуск robot.service уже запрошен"
             self.stand = None
             self.tg = None
             self.demo = None
-        self.stop_motion("хоуминг: моторы обмякнут, ноги едут в упоры")
-        if active:
-            err = self.switch([], active)
-            if err:
-                return err
+        self.stop_motion("хоуминг: restart robot.service")
+        r = subprocess.run(
+            ["sudo", "-n", "systemctl", "restart", ROBOT_UNIT],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if r.returncode != 0:
+            return (r.stderr or r.stdout or f"systemctl restart {ROBOT_UNIT} failed").strip()
         with self.lock:
-            self.rehome_req = {"t": time.monotonic(), "seq0": seq0, "acked": False}
-            self.demo_note = "хоуминг запрошен: " + (
-                "все ноги сразу" if mode == REHOME_MODES["all"] else f"сначала задние, пауза {delay:.1f} с, потом передние"
-            )
-        self.rehome_pub.publish(Float32MultiArray(data=[float(mode), float(delay)]))
+            self.homing_status = None
+            self.rehome_req = {"t": time.monotonic(), "seq0": None, "acked": False}
+            self.demo_note = f"{ROBOT_UNIT} перезапущен, жду хоуминг"
         return None
 
     def api_demo_params(self, body: dict) -> str | None:
@@ -925,14 +1178,14 @@ class Dashboard(Node):
             if self.rehome_req is not None:
                 return "хоуминг ещё не подтверждён"
             if any(p is None for p in self.joint_pos):
-                return "нет /joint_states — не знаю, откуда плавно ехать"
+                return "нет /joint_states"
             start = list(self.joint_pos)
             active = [n for n, s in self.controllers.items() if s == "active"]
             self.stand = None
             self.tg = None
             self.demo = None
             p = dict(self.demo_params)
-        self.stop_motion("демо: стойка по обратной кинематике")
+        self.stop_motion("стойка IK")
         with self.demo_ik_lock:
             self.demo_ik.reset()
         self._publish_forward(start, [p["kp"]] * 12, [p["kd"]] * 12)
@@ -947,11 +1200,11 @@ class Dashboard(Node):
                 "cur": self._demo_targets(p), "ik_err": 0.0, "clamped": False,
                 "anim_on": False, "anim_amp": 0.0, "anim_phase": 0.0,
             }
-            self.demo_note = f"выезжаю в стойку: лапа {p['leg']} встанет на середину нижнего ребра"
+            self.demo_note = f"стойка IK · {p['leg']}"
         return None
 
     def api_demo_anim(self, on: bool) -> str | None:
-        """Запустить анимацию (при необходимости сначала выехать в стойку) или погасить её."""
+        """Вкл/выкл анимацию треугольника."""
         if on:
             with self.lock:
                 running = self.demo is not None
@@ -961,17 +1214,17 @@ class Dashboard(Node):
                     return err
             with self.lock:
                 self.demo["anim_on"] = True
-                self.demo_note = "анимация: лапа идёт по рёбрам — вперёд-низ, назад-низ, верх"
+                self.demo_note = "анимация треугольника"
             return None
         with self.lock:
             if self.demo is None:
                 return "анимация не идёт: стойка не включена"
             self.demo["anim_on"] = False
-            self.demo_note = "гашу анимацию: лапа возвращается на середину нижнего ребра"
+            self.demo_note = "гашу анимацию"
         return None
 
     def _demo_targets(self, p: dict) -> dict:
-        """Цель каждой ноги [dx, dy, ext] до анимации: только выбранная нога уходит от стойки."""
+        """Смещения ног до анимации."""
         targets = {leg: [0.0, 0.0, 0.0] for leg in LEGS}
         left = 1.0 if p["leg"].endswith("_l") else -1.0
         targets[p["leg"]] = [p["shift_x"], left * p["spread"], p["height"] - self.demo_nom_h]
@@ -986,18 +1239,18 @@ class Dashboard(Node):
             self.stand = None
             self.tg = None
             self.demo = None
-        self.stop_motion("демо: момент снят")
+        self.stop_motion("момент снят")
         self._publish_forward(pos, [0.0] * 12, [0.1] * 12)
         others = [n for n in active if n not in FORWARD and "broadcaster" not in n]
         err = self.switch(FORWARD, others)
         if err:
             return err
         with self.lock:
-            self.demo_note = "момент снят: ноги обмякли, робот должен лежать или висеть"
+            self.demo_note = "момент снят"
         return None
 
     def demo_triangle(self, p: dict) -> list[list[float]]:
-        """Три угла траектории в base_link: вперёд-низ, назад-низ, верх."""
+        """Углы треугольника в base_link."""
         nom = self.demo_ik.nominal[p["leg"]]
         left = 1.0 if p["leg"].endswith("_l") else -1.0
         bx = float(nom[0]) + p["shift_x"]
@@ -1012,11 +1265,7 @@ class Dashboard(Node):
 
     @staticmethod
     def _tri_delta(phase: float, anim_x: float, anim_h: float) -> tuple[float, float]:
-        """Смещение (dx, dext) по рёбрам. dext < 0 — лапа выше нижнего ребра.
-
-        Порядок углов как в CS123 lab 3: вперёд-низ → назад-низ → верх → снова вперёд.
-        phase 0..1 — один обход, на каждое ребро уходит треть периода.
-        """
+        """(dx, dext) по рёбрам треугольника, phase 0..1."""
         corners = ((anim_x, 0.0), (-anim_x, 0.0), (0.0, -anim_h))
         u = (phase * 3.0) % 3.0
         seg = int(u)
@@ -1027,10 +1276,7 @@ class Dashboard(Node):
 
     @staticmethod
     def _demo_offsets(cur: dict, leg: str, anim_dx: float, anim_ext: float) -> tuple[dict, bool]:
-        """Смещения лап от стойки (dx, dy, dz), м, и признак «дальше предела ноги».
-
-        anim_dx и anim_ext — добавка анимации, применяется только к выбранной ноге.
-        """
+        """Смещения лап (м) + флаг clamp."""
         offsets, clamped = {}, False
         for name, (dx, dy, ext) in cur.items():
             if name == leg:
@@ -1050,14 +1296,13 @@ class Dashboard(Node):
             fwd_active = all(self.controllers.get(n) == "active" for n in FORWARD)
             if not fwd_active and now - demo["t0"] > 3.0:
                 self.demo = None
-                self.demo_note = "демо снято: forward-контроллеры выключены"
+                self.demo_note = "демо снято"
                 return
             p = dict(self.demo_params)
             dt = min(0.1, now - demo["t_last"])
             demo["t_last"] = now
             trim = list(self.trim)
-            # Ползунок не прыгает ногой: цель догоняется со скоростью follow (м/с).
-            # Смена ноги работает так же: прежняя плавно возвращается в стойку, новая выходит.
+            # догоняем цель со скоростью follow
             step = p["follow"] * dt
             for leg, target in self._demo_targets(p).items():
                 cur_leg = demo["cur"][leg]
@@ -1065,7 +1310,7 @@ class Dashboard(Node):
                     cur_leg[k] += clamp(target[k] - cur_leg[k], -step, step)
             cur = {leg: list(v) for leg, v in demo["cur"].items()}
             el = now - demo["t0"]
-            # Анимация стартует после выезда в стойку и входит/гаснет за DEMO_ANIM_FADE.
+            # fade анимации
             want_anim = demo["anim_on"] and el >= p["ramp"]
             fade = dt / DEMO_ANIM_FADE
             demo["anim_amp"] = clamp(demo["anim_amp"] + (fade if want_anim else -fade), 0.0, 1.0)
@@ -1092,15 +1337,16 @@ class Dashboard(Node):
         with self.ear_lock:
             if body.get("reset"):
                 self.ear_params = dict(EAR_DEFAULTS)
-                return None
-            for k, v in body.items():
-                if k not in EAR_LIMITS:
-                    return f"неизвестный параметр {k!r}"
-                lo, hi = EAR_LIMITS[k]
-                number = clamp(float(v), lo, hi)
-                if k == "swap":
-                    number = 1.0 if number >= 0.5 else 0.0
-                self.ear_params[k] = number
+            else:
+                for k, v in body.items():
+                    if k not in EAR_LIMITS:
+                        return f"неизвестный параметр {k!r}"
+                    lo, hi = EAR_LIMITS[k]
+                    number = clamp(float(v), lo, hi)
+                    if k == "swap":
+                        number = 1.0 if number >= 0.5 else 0.0
+                    self.ear_params[k] = number
+        self._remember()
         return None
 
     def api_ears(self, mode: str) -> str | None:
@@ -1121,12 +1367,12 @@ class Dashboard(Node):
             self.ear_t_last = time.monotonic()
             self.ear_err = ""
             self.ear_note = {
-                "zero": "оба уха в 0",
-                "a": "держу оба уха в крае A",
-                "b": "держу оба уха в крае B",
-                "sync": "вместе: оба уха ходят от A к B и обратно",
-                "mirror": "зеркально: левое A→B, правое B→A",
-                "alt": "по очереди: одно ухо в A, потом в B и отпуск, затем другое",
+                "zero": "уши в 0",
+                "a": "уши в A",
+                "b": "уши в B",
+                "sync": "уши вместе",
+                "mirror": "уши зеркально",
+                "alt": "уши по очереди",
             }[mode]
         return None
 
@@ -1134,14 +1380,16 @@ class Dashboard(Node):
         with self.ear_lock:
             was = self.ear_mode is not None or self.ear_servos is not None
             self.ear_mode = None
+            self.ear_pose = (None, None)
+            self.ear_pose_dirty = True
             servos = list(self.ear_servos.values()) if self.ear_servos else []
             for servo in servos:
                 servo.detach()
             if was:
-                self.ear_note = "импульс снят: уши обмякли, дай им остыть"
+                self.ear_note = "уши отпущены"
 
     def _ears_open(self) -> str | None:
-        """Подготовить каналы ШИМ при первой команде. До set() импульса нет."""
+        """Открыть PWM при первой команде."""
         with self.ear_lock:
             if self.ear_servos is not None:
                 return None
@@ -1166,6 +1414,11 @@ class Dashboard(Node):
             servos = self.ear_servos
             mode = self.ear_mode
             if servos is None or mode is None:
+                if not self.ear_pose_dirty:
+                    return
+                left, right = self.ear_pose
+                self.ear_pose_dirty = False
+                self._publish_ear_pose(left, right)
                 return
             p = dict(self.ear_params)
             dt = min(0.1, now - self.ear_t_last) if self.ear_t_last else 0.0
@@ -1175,7 +1428,8 @@ class Dashboard(Node):
             phase = self.ear_phase
         left, right = self._ear_targets(mode, phase, p)
         try:
-            self._ear_apply(left, right)
+            if self._ear_apply(left, right):
+                self._publish_ear_pose(left, right)
         except OSError as e:
             self.ears_off()
             with self.ear_lock:
@@ -1184,14 +1438,14 @@ class Dashboard(Node):
 
     @staticmethod
     def _ear_targets(mode: str, phase: float, p: dict) -> tuple[float | None, float | None]:
-        """(левое, правое). None — отпустить серву. Числа — текущие края A/B."""
+        """Позиции ушей; None = отпустить."""
         if mode == "zero":
             return 0.0, 0.0
         if mode == "a":
             return p["a_l"], p["a_r"]
         if mode == "b":
             return p["b_l"], p["b_r"]
-        # 0 на крае A, 1 на крае B, обратно к A. Косинус, чтобы на развороте не было удара.
+        # A↔B, косинус на развороте
         w = 0.5 - 0.5 * math.cos(2.0 * math.pi * phase)
         if mode == "sync":
             return (
@@ -1203,7 +1457,7 @@ class Dashboard(Node):
                 p["a_l"] + (p["b_l"] - p["a_l"]) * w,
                 p["a_r"] + (p["b_r"] - p["a_r"]) * (1.0 - w),
             )
-        # Четыре равные доли периода, как tools/ears_cycle.py, но края берутся из ползунков.
+        # как ears_cycle, края с ползунков
         q = (phase * 4.0) % 4.0
         seg = int(q)
         a = q - seg
@@ -1216,24 +1470,28 @@ class Dashboard(Node):
         return p["a_l"] + (p["b_l"] - p["a_l"]) * a, None
 
     def _ear_sides(self) -> tuple[int, int]:
-        """GPIO левого и правого уха с учётом свапа. Читать под ear_lock."""
+        """GPIO L/R с учётом swap."""
         if self.ear_params["swap"] >= 0.5:
             return 13, 12
         return 12, 13
 
-    def _ear_apply(self, left: float | None, right: float | None) -> None:
+    def _publish_ear_pose(self, left: float | None, right: float | None) -> None:
+        self.ear_pose_pub.send_json({"left": left, "right": right})
+
+    def _ear_apply(self, left: float | None, right: float | None) -> bool:
         with self.ear_lock:
             servos = self.ear_servos
             if servos is None or self.ear_mode is None:
-                return
+                return False
             gpio_l, gpio_r = self._ear_sides()
-            # Оба пина в одном тике: при свапе старый пин не остаётся со старым импульсом.
+            # оба пина за один тик
             for gpio, value in ((gpio_l, left), (gpio_r, right)):
                 servo = servos[gpio]
                 if value is None:
                     servo.detach()
                 else:
                     servo.set(value)
+            return True
 
     def api_tg_params(self, body: dict) -> str | None:
         with self.lock:
@@ -1242,46 +1500,14 @@ class Dashboard(Node):
                     lo, hi = TG_LIMITS[k]
                     self.tg_params[k] = clamp(float(v), lo, hi)
                 elif k == "imu_on":
-                    # Баланс по IMU всегда включён; параметр оставлен в meta для старых клиентов.
+                    # imu всегда on
                     self.tg_params[k] = True
                 else:
                     return f"неизвестный параметр {k!r}"
-            if self.recorder.active:
-                self.recorder.log_event({"tg_params": dict(self.tg_params)})
-        return None
-
-    def api_record(self, body: dict) -> str | None:
-        """Запись ros2 bag для sysid/обучения (tools/pupper_record.py, ai/rl/REAL_DATA.md)."""
-        if bool(body.get("on")):
-            if self.recorder.active:
-                return "запись уже идёт"
-            with self.lock:
-                extra = {
-                    "source": "dashboard",
-                    "mode": "tg" if self.tg is not None else "demo" if self.demo is not None else "gait" if self.gait_active() else "stand" if self.stand is not None else "idle",
-                    "tg_params": dict(self.tg_params),
-                    "trim": list(self.trim),
-                }
-            # RuntimeError здесь — это сообщение для пользователя (мало места, запись уже идёт), а не сбой.
-            try:
-                session = self.recorder.start(str(body.get("note", "")), extra)
-            except RuntimeError as e:
-                return str(e)
-            self.rec_t0 = time.monotonic()
-            self.rec_note = f"пишу: {session}"
-            return None
-        if not self.recorder.active:
-            return "запись не идёт"
-        try:
-            session = self.recorder.stop()
-        except RuntimeError as e:
-            self.rec_note = str(e)
-            return str(e)
-        self.rec_note = f"сохранено: {session}  (экспорт: python3 tools/pupper_record.py export {session})"
         return None
 
     def _tg_balance(self, tg: dict, p: dict, imu_q, gyro, imu_age: float, dt: float) -> dict[str, float] | None:
-        """Поправки высоты лап, м. None — сообщений IMU нет, шаг гасится."""
+        """dz лап по IMU; None = нет данных."""
         if not imu_usable(imu_q, imu_age):
             return None
         roll, pitch, _ = euler(imu_q)
@@ -1295,8 +1521,7 @@ class Dashboard(Node):
         tg["i_pitch"] = clamp(tg["i_pitch"] + p["imu_ki"] * pt * dt, -TG_IMU_I_MAX, TG_IMU_I_MAX)
         corr_roll = p["imu_gain"] * r + tg["i_roll"] + p["imu_damp"] * gyro[0]
         corr_pitch = p["imu_gain"] * pt + tg["i_pitch"] + p["imu_damp"] * gyro[1]
-        # roll > 0 — правый бок (y < 0) ниже: правые лапы опускаем (dz < 0).
-        # pitch > 0 — нос ниже: передние лапы (x > 0) опускаем.
+        # roll/pitch → опустить низкую сторону
         dz = {}
         for leg, p0 in self.tg_gait.nominal.items():
             x, y = float(p0[0]), float(p0[1])
@@ -1304,7 +1529,7 @@ class Dashboard(Node):
         return dz
 
     def _tg_yaw_turn(self, tg: dict, imu_q, imu_age: float, dt: float) -> float:
-        """Добавка к turn, чтобы держать курс старта шага. 0, если IMU плохой."""
+        """Поправка turn под курс старта."""
         if not imu_usable(imu_q, imu_age) or dt <= 0.0:
             return 0.0
         yaw = euler(imu_q)[2]
@@ -1328,7 +1553,7 @@ class Dashboard(Node):
             fwd_active = all(self.controllers.get(n) == "active" for n in FORWARD)
             if not fwd_active and now - tg["t0"] > 3.0:
                 self.tg = None
-                self.tg_note = "генератор снят: forward-контроллеры выключены"
+                self.tg_note = "генератор снят"
                 return
             p = dict(self.tg_params)
             dt = min(0.1, now - tg["t_last"])
@@ -1356,7 +1581,7 @@ class Dashboard(Node):
                 with self.lock:
                     if tg["stop_t"] is None:
                         tg["stop_t"] = now
-                    self.tg_note = f"IMU молчит {imu_age:.2f} с — коррекции нет, гашу шаг"
+                    self.tg_note = f"нет IMU {imu_age:.2f} с — гашу шаг"
             else:
                 dz = {leg: v * amp for leg, v in dz.items()}
             tg["dz"] = dz if dz is not None else {leg: 0.0 for leg in LEGS}
@@ -1368,20 +1593,19 @@ class Dashboard(Node):
             tg["ik_err"] = self.tg_gait.ik_err
             cmd = [q[i] + trim[i] for i in range(12)]
         tg["cmd"] = cmd
-        # Проверка и отправка под одной блокировкой: если пока считали углы, нажали
-        # аварийный стоп или «Стойку», генератор уже снят и момент подавать нельзя.
+        # публикация только если tg ещё жив
         with self.lock:
             if self.tg is not tg:
                 return
             self._publish_forward(cmd, [p["kp"]] * 12, [p["kd"]] * 12)
             if el >= TG_TO_STAND and tg["stop_t"] is not None and tg["amp"] == 0.0:
-                # Шаг погас — дальше держит обычная «Стойка».
+                # шаг кончился → стойка
                 self.tg = None
                 self.stand = {
                     "start": list(cmd), "t0": now - STAND_RAMP, "t_last": now,
                     "kp": [STAND_KP] * 12, "i": [0.0] * 12, "cmd": list(cmd),
                 }
-                self.tg_note = "генератор остановлен, держу стойку"
+                self.tg_note = "стоп, держу стойку"
 
     def _publish_forward(self, pos: list[float], kp: list[float], kd: list[float]) -> None:
         kp, kd = list(kp), list(kd)
@@ -1395,11 +1619,6 @@ class Dashboard(Node):
     def stand_step(self, now: float) -> None:
         with self.lock:
             stand = self.stand
-            fwd_active = all(self.controllers.get(n) == "active" for n in FORWARD)
-            if stand is not None and not fwd_active and now - stand["t0"] > 3.0:
-                self.stand = None
-                self.mission_note = "стойка снята: forward-контроллеры выключены"
-                return
             if stand is None:
                 return
             dt = min(0.2, now - stand["t_last"])
@@ -1412,9 +1631,7 @@ class Dashboard(Node):
                 ref = stand["start"][i] + a * (goal - stand["start"][i])
                 q = self.joint_pos[i]
                 err = ref - q
-                # Добавка только пока сустав не дотягивает до стойки, и не больше STAND_I_MAX.
-                # Команду нельзя привязывать к фактическому углу: иначе уступившее колено
-                # утаскивает цель за собой до упора и само уже не возвращается.
+                # интеграл по ошибке к цели, не к факту
                 if abs(err) > STAND_ERR_OK:
                     if ramp >= 1.0:
                         kp[i] = min(STAND_KP_MAX_JOINT.get(JOINTS[i], STAND_KP_MAX), kp[i] + STAND_KP_RATE * dt)
@@ -1429,14 +1646,27 @@ class Dashboard(Node):
         self._publish_forward(cmd, kps, [k * STAND_KD_PER_KP for k in kps])
 
     def api_trim(self, body: dict) -> str | None:
+        publish = None
         with self.lock:
-            if self.stand is None:
+            stand = self.stand
+            if stand is None:
                 return "поправки крутятся только в режиме «Стойка»"
             if body.get("reset"):
+                delta = [saved - current for saved, current in zip(self.trim_saved, self.trim)]
                 self.trim = list(self.trim_saved)
-                return None
-            i = int(body["index"])
-            self.trim[i] = clamp(self.trim[i] + float(body["delta"]), -TRIM_MAX, TRIM_MAX)
+            else:
+                i = int(body["index"])
+                if not 0 <= i < len(JOINTS):
+                    return f"сустав {i}: нужен индекс 0…{len(JOINTS) - 1}"
+                old = self.trim[i]
+                self.trim[i] = clamp(old + float(body["delta"]), -TRIM_MAX, TRIM_MAX)
+                delta = [0.0] * len(JOINTS)
+                delta[i] = self.trim[i] - old
+            # Не ждём следующего control_step: поправка сразу уходит к мотору и
+            # попадает в /api/state. Дальше stand_step продолжает держать цель.
+            stand["cmd"] = [command + change for command, change in zip(stand["cmd"], delta)]
+            publish = (list(stand["cmd"]), list(stand["kp"]))
+        self._publish_forward(publish[0], publish[1], [kp * STAND_KD_PER_KP for kp in publish[1]])
         return None
 
     def api_trim_save(self) -> str | None:
@@ -1447,7 +1677,7 @@ class Dashboard(Node):
         with open(XACRO, encoding="utf-8") as f:
             text = f.read()
         changed = []
-        # Каждый сустав из JOINTS: abad (_1), hip (_2) и knee (_3). Нулевая поправка не пишется.
+        # пишем ненулевой trim в xacro
         for name, d in zip(JOINTS, delta):
             if abs(d) < 1e-6:
                 continue
@@ -1459,8 +1689,7 @@ class Dashboard(Node):
                 k: float(re.search(rf'<param name="{k}">([^<]+)</param>', block).group(1))
                 for k in ("homed_position", "post_homing_position", "position_min", "position_max")
             }
-            # Упор физически тот же, но в новых координатах он на d меньше;
-            # вместе с ним сдвигаются пределы, а post_homing — если он стоял на упоре.
+            # сдвиг нуля и лимитов на d
             new = {
                 "homed_position": vals["homed_position"] - d,
                 "position_min": vals["position_min"] - d,
@@ -1476,7 +1705,7 @@ class Dashboard(Node):
             f.write(text)
         with self.lock:
             self.trim_saved = list(self.trim)
-            self.trim_note = "записано (" + ", ".join(changed) + "). Применится после sudo systemctl restart robot.service и нового хоуминга; поправки в пульте тогда станут нулевыми."
+            self.trim_note = "записано (" + ", ".join(changed) + "). Нужен restart robot.service + хоуминг."
         return None
 
     # --- движение -------------------------------------------------------
@@ -1499,7 +1728,7 @@ class Dashboard(Node):
 
     def estop(self) -> None:
         self.ears_off()
-        self.stop_motion("АВАРИЙНЫЙ СТОП: момент ослаблен, включи походку заново")
+        self.stop_motion("АВАРИЙНЫЙ СТОП")
         self.estop_pub.publish(Empty())
         with self.lock:
             was_standing = self.stand is not None or self.tg is not None or self.demo is not None
@@ -1507,7 +1736,7 @@ class Dashboard(Node):
             self.demo = None
             if self.tg is not None:
                 self.tg = None
-                self.tg_note = "генератор снят аварийным стопом"
+                self.tg_note = "генератор снят (estop)"
             pos = [p if p is not None else 0.0 for p in self.joint_pos]
         if was_standing:
             self._publish_forward(pos, [0.0] * 12, [0.1] * 12)
@@ -1587,7 +1816,7 @@ class Dashboard(Node):
             if abs(rem) < 0.03:
                 return self._next_step()
             v = clamp(0.8 * abs(rem) + 0.08, 0.0, self.vmax)
-            self.mission_note = f"прямо: осталось {rem:+.2f} м (по оценке)"
+            self.mission_note = f"прямо: осталось {rem:+.2f} м"
             return (math.copysign(v, rem), 0.0, clamp(2.0 * wrap(h0 - yaw), -self.wmax, self.wmax))
 
         dx = step["x"] - self.x
@@ -1607,7 +1836,7 @@ class Dashboard(Node):
     def _next_step(self):
         self.mission.pop(0)
         if not self.mission:
-            self.mission_note = "маршрут пройден (по оценке одометрии)"
+            self.mission_note = "маршрут пройден"
         return (0.0, 0.0, 0.0)
 
     # --- фон ------------------------------------------------------------
@@ -1619,10 +1848,10 @@ class Dashboard(Node):
             homing = read_homing()
             with self.lock:
                 if self.homing["when"] is not None and homing["when"] != self.homing["when"]:
-                    # Новый хоуминг уже с записанными нулями — старые поправки стали бы двойными.
+                    # новый хоуминг — trim сбросить
                     self.trim = [0.0] * 12
                     self.trim_saved = [0.0] * 12
-                    self.trim_note = "robot.service перезапущен: поправки обнулены, нули из xacro"
+                    self.trim_note = "restart: trim сброшен"
                 self.homing = homing
             time.sleep(15.0)
 
@@ -1720,9 +1949,8 @@ class Dashboard(Node):
             req = self.rehome_req
             homing_error = None
             if req is not None and not req["acked"] and now - req["t"] > REHOME_ACK_TIMEOUT:
-                homing_error = (f"робот не ответил на /motor_rehome за {REHOME_ACK_TIMEOUT:.0f} с: "
-                                "control_board_hardware_interface собран без повторного хоуминга "
-                                "или robot.service не запущен")
+                homing_error = (f"после перезапуска {ROBOT_UNIT} нет /motor_homing/status за {REHOME_ACK_TIMEOUT:.0f} с: "
+                                "смотри journalctl -u robot.service")
             hs = self.homing_status
             demo_state = {
                 "active": self.demo is not None,
@@ -1760,8 +1988,6 @@ class Dashboard(Node):
                 },
                 "tg_params": dict(self.tg_params),
                 "tg_note": self.tg_note,
-                "record": {"active": self.recorder.active, "t": now - self.rec_t0 if self.recorder.active else None,
-                           "note": self.rec_note},
                 "imu": imu,
                 "imu_power": self.imu_power_on,
                 "imu_hist": hist,
@@ -1783,8 +2009,21 @@ class Dashboard(Node):
                 "mission_note": self.mission_note,
                 "odom": {"x": self.x, "y": self.y, "yaw": self.odom_yaw(), "trail": list(self.trail)},
                 "limits": {"vmax": self.vmax, "vymax": self.vymax, "wmax": self.wmax, "scale": self.odom_scale},
+                "speed_mode": SPEED_MODES[self.speed_mode_index][0],
                 "homing": self.homing,
                 "log": list(self.log),
+                "camera": {
+                    "age": None if self.camera_rx_t <= 0.0 else now - self.camera_rx_t,
+                    "preview_age": None if self.camera_t <= 0.0 else now - self.camera_t,
+                    "bytes": self.camera_bytes,
+                    "ok": self.camera_rx_t > 0.0 and now - self.camera_rx_t < 1.5,
+                },
+                "detection": {
+                    "age": None if self.detection_rx_t <= 0.0 else now - self.detection_rx_t,
+                    "preview_age": None if self.detection_t <= 0.0 else now - self.detection_t,
+                    "bytes": self.detection_bytes,
+                    "ok": self.detection_rx_t > 0.0 and now - self.detection_rx_t < 1.5,
+                },
             }
 
     # --- API ------------------------------------------------------------
@@ -1820,10 +2059,88 @@ class Dashboard(Node):
 
     def api_limits(self, body: dict) -> None:
         with self.lock:
-            self.vmax = clamp(float(body.get("vmax", self.vmax)), 0.05, 0.75)
-            self.vymax = clamp(float(body.get("vymax", self.vymax)), 0.05, 0.5)
-            self.wmax = clamp(float(body.get("wmax", self.wmax)), 0.2, 2.0)
+            self.vmax = clamp(float(body.get("vmax", self.vmax)), 0.05, 3.0)
+            self.vymax = clamp(float(body.get("vymax", self.vymax)), 0.05, 2.0)
+            self.wmax = clamp(float(body.get("wmax", self.wmax)), 0.2, 6.0)
             self.odom_scale = clamp(float(body.get("scale", self.odom_scale)), 0.2, 2.0)
+        self._remember()
+
+    def _load_prefs(self) -> None:
+        if not os.path.isfile(PREFS_PATH):
+            return
+        try:
+            with open(PREFS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, UnicodeError) as e:
+            self.get_logger().error("не прочитал %s: %s" % (PREFS_PATH, e))
+            return
+        if not isinstance(data, dict):
+            self.get_logger().error("%s: ожидался объект" % PREFS_PATH)
+            return
+        speeds = data.get("speeds")
+        if isinstance(speeds, dict):
+            for key, lo, hi in (("vmax", 0.05, 3.0), ("vymax", 0.05, 2.0), ("wmax", 0.2, 6.0)):
+                if key not in speeds:
+                    continue
+                try:
+                    number = float(speeds[key])
+                except (TypeError, ValueError):
+                    self.get_logger().error("%s: скорости.%s не число" % (PREFS_PATH, key))
+                    continue
+                setattr(self, key, clamp(number, lo, hi))
+        saved_mode = data.get("speed_mode")
+        for index, (name, _label, vx, vy, yaw, _rgb) in enumerate(SPEED_MODES):
+            if saved_mode == name or (self.vmax, self.vymax, self.wmax) == (vx, vy, yaw):
+                self.speed_mode_index = index
+                self.vmax, self.vymax, self.wmax = vx, vy, yaw
+                self.speed_mode_restore_pending = True
+                break
+        ears = data.get("ears")
+        if isinstance(ears, dict):
+            for key, (lo, hi) in EAR_LIMITS.items():
+                if key not in ears:
+                    continue
+                try:
+                    number = float(ears[key])
+                except (TypeError, ValueError):
+                    self.get_logger().error("%s: уши.%s не число" % (PREFS_PATH, key))
+                    continue
+                number = clamp(number, lo, hi)
+                if key == "swap":
+                    number = 1.0 if number >= 0.5 else 0.0
+                self.ear_params[key] = number
+        self.get_logger().info(
+            "скорости %.2f/%.2f/%.2f и края ушей из %s" % (self.vmax, self.vymax, self.wmax, PREFS_PATH)
+        )
+
+    def _remember(self) -> None:
+        with self.prefs_lock:
+            if self.prefs_timer is not None:
+                self.prefs_timer.cancel()
+            timer = threading.Timer(0.5, self._write_prefs)
+            timer.daemon = True
+            self.prefs_timer = timer
+            timer.start()
+
+    def _write_prefs(self) -> None:
+        with self.lock:
+            speeds = {"vmax": self.vmax, "vymax": self.vymax, "wmax": self.wmax}
+            speed_mode = SPEED_MODES[self.speed_mode_index][0]
+        with self.ear_lock:
+            ears = {key: self.ear_params[key] for key in EAR_LIMITS}
+        raw = json.dumps(
+            {"speed_mode": speed_mode, "speeds": speeds, "ears": ears},
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n"
+        tmp = PREFS_PATH + ".tmp"
+        try:
+            os.makedirs(os.path.dirname(PREFS_PATH), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(raw)
+            os.replace(tmp, PREFS_PATH)
+        except OSError as e:
+            self.get_logger().error("не записал %s: %s" % (PREFS_PATH, e))
 
     def api_odom_reset(self) -> None:
         with self.lock:
@@ -1855,6 +2172,13 @@ def make_handler(node: Dashboard):
         def _path(self) -> str:
             return self.path.split("?", 1)[0]
 
+        def _preview_jpeg(self, kind: str, topic: str) -> None:
+            jpeg, _age = node.preview_frame(kind, wait=0.5)
+            if jpeg is None:
+                self.send_error(503, explain=f"нет кадра с {topic}")
+                return
+            self._send(200, "image/jpeg", jpeg)
+
         def do_GET(self) -> None:  # noqa: N802
             if screen_ctl.handle_get(self):
                 return
@@ -1863,9 +2187,16 @@ def make_handler(node: Dashboard):
                 self._json(200, node.snapshot())
             elif path == "/api/vpn":
                 self._json(200, {"active": vpn_active(), "unit": VPN_UNIT})
+            elif path == "/api/camera.jpg":
+                self._preview_jpeg("camera", "/camera/image_raw/compressed")
+            elif path == "/api/detection.jpg":
+                self._preview_jpeg("detection", "/glaz_detect/annotated/compressed")
             elif path in ("/", "/index.html"):
                 with open(page_path, "rb") as f:
                     self._send(200, "text/html; charset=utf-8", f.read())
+            elif path == "/leg_labels.js":
+                with open(os.path.join(HERE, "leg_labels.js"), "rb") as f:
+                    self._send(200, "application/javascript; charset=utf-8", f.read())
             else:
                 self.send_error(404)
 
@@ -1887,19 +2218,9 @@ def make_handler(node: Dashboard):
             n = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(n).decode()) if n > 0 else {}
             err = None
-            if path == "/api/cmd":
-                node.api_cmd(body)
-            elif path == "/api/stop":
+            if path == "/api/stop":
                 node.ears_off()
                 node.stop_motion("стоп")
-                if node.tg is not None:
-                    node.set_tg(False)
-            elif path == "/api/tg":
-                err = node.set_tg(bool(body.get("on")))
-            elif path == "/api/tg_params":
-                err = node.api_tg_params(body)
-            elif path == "/api/record":
-                err = node.api_record(body)
             elif path == "/api/estop":
                 node.estop()
             elif path == "/api/revive":
@@ -1912,12 +2233,10 @@ def make_handler(node: Dashboard):
                 err = node.api_policy_offset(body)
             elif path == "/api/mission":
                 err = node.api_mission(body)
-            elif path == "/api/limits":
-                node.api_limits(body)
             elif path == "/api/stand":
                 err = node.set_stand()
             elif path == "/api/demo_homing":
-                err = node.api_demo_homing(body)
+                err = node.api_demo_homing()
             elif path == "/api/demo_stance":
                 err = node.set_demo_stance()
             elif path == "/api/demo_anim":
@@ -1958,8 +2277,7 @@ def main() -> None:
     screen_ctl.ensure_library()
     rclpy.init()
     node = Dashboard()
-    # Все колбэки в одной MutuallyExclusive-группе узла, так что потоки
-    # MultiThreadedExecutor параллелизма не давали, только накладные расходы.
+    # колбэки MutualExclusive — MultiThreaded бесполезен
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     threading.Thread(target=executor.spin, daemon=True).start()
