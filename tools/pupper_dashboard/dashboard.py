@@ -288,6 +288,8 @@ JOY_R1 = 5
 JOY_R2 = 7
 # R2: отпускать уши только после удержания
 JOY_R2_HOLD_S = 0.5
+JOY_SQUARE_HOLD_S = 0.5
+JOINT_STATE_MAX_AGE = 0.25
 # ждать /motor_homing/status после restart
 REHOME_ACK_TIMEOUT = 60.0
 CMD_TOPIC = "/llm_cmd_vel"
@@ -474,6 +476,8 @@ class Dashboard(Node):
         self.joy_busy = False
         self.joy_r2_since: float | None = None
         self.joy_r2_off = False
+        self.joy_square_since: float | None = None
+        self.joy_square_fired = False
         self.prefs_lock = threading.Lock()
         self.prefs_timer: threading.Timer | None = None
         self.tg_note = ""
@@ -538,7 +542,11 @@ class Dashboard(Node):
                 CompressedImage, "/glaz_detect/annotated/compressed", self.on_detection_camera, 1
             ),
         ]
-        self.create_subscription(Joy, "/joy", self.on_joy, 10)
+        # Для кнопок важнее свежий кадр, чем гарантированная доставка старого нажатия.
+        self.create_subscription(
+            Joy, "/joy", self.on_joy,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT),
+        )
         self.create_subscription(Twist, "/cmd_vel", self.on_cmd_out, 10)
         self.create_subscription(String, "/cmd_vel_mux/active_source", self.on_mux, 10)
         self.create_subscription(Log, "/rosout", self.on_log, 50)
@@ -640,6 +648,10 @@ class Dashboard(Node):
     def _set_lightbar(self, red: int, green: int, blue: int) -> None:
         """Установить RGB lightbar DualSense через драйвер hid-playstation."""
         rgb = (red, green, blue)
+        if self.lightbar_dir is None or not os.path.isdir(self.lightbar_dir):
+            lightbars = glob.glob("/sys/class/leds/input*:rgb:indicator")
+            self.lightbar_dir = lightbars[0] if len(lightbars) == 1 else None
+            self.lightbar_rgb = None
         if self.lightbar_dir is None or rgb == self.lightbar_rgb:
             return
         with open(f"{self.lightbar_dir}/multi_intensity", "w", encoding="ascii") as file:
@@ -770,6 +782,7 @@ class Dashboard(Node):
         self.joy_prev = buttons
         now = time.monotonic()
         r2 = JOY_R2 < len(buttons) and bool(buttons[JOY_R2])
+        square = JOY_SQUARE < len(buttons) and bool(buttons[JOY_SQUARE])
         if not r2:
             self.joy_r2_since = None
             self.joy_r2_off = False
@@ -779,16 +792,22 @@ class Dashboard(Node):
             self.joy_r2_off = True
             self.ears_off()
             self.get_logger().info("джойстик R2: уши отпущены")
+        if not square:
+            self.joy_square_since = None
+            self.joy_square_fired = False
+        elif self.joy_square_since is None:
+            self.joy_square_since = now
+        elif not self.joy_square_fired and now - self.joy_square_since >= JOY_SQUARE_HOLD_S:
+            self.joy_square_fired = True
+            self._joy_run("стойка", self.set_stand)
         if prev is None:
             return
 
         def rose(i: int) -> bool:
             return i < len(buttons) and i < len(prev) and not prev[i] and buttons[i]
 
-        # □ стойка  ○ демо  △ хоуминг  L1 скорость  R1 уши  R2 hold=off
-        if rose(JOY_SQUARE):
-            self._joy_run("стойка", self.set_stand)
-        elif rose(JOY_CIRCLE):
+        # □ hold 0.5 s: стойка; ○ демо; △ хоуминг; L1 скорость; R1 уши.
+        if rose(JOY_CIRCLE):
             self._joy_run("кручение лапы", lambda: self.api_demo_anim(True))
         elif rose(JOY_TRIANGLE):
             self._joy_run("хоуминг", self.api_demo_homing)
@@ -822,20 +841,25 @@ class Dashboard(Node):
             if self.speed_mode_pending:
                 return
             mode_index = (self.speed_mode_index + 1) % len(SPEED_MODES)
-        self._set_speed_mode(mode_index, flash=True, origin="L1")
+            self.speed_mode_index = mode_index
+            self.speed_mode_restore_pending = True
+            _name, _label, vx, vy, yaw, rgb = SPEED_MODES[mode_index]
+            self.vmax, self.vymax, self.wmax = vx, vy, yaw
+            self.speed_mode_flash_rgb = rgb
+            self.speed_mode_flash_until = time.monotonic() + SPEED_MODE_FLASH_SECONDS
+        self._remember()
+        self._restore_speed_mode(origin="L1")
 
-    def _restore_speed_mode(self) -> None:
+    def _restore_speed_mode(self, origin: str = "восстановление") -> None:
         with self.lock:
             if not self.speed_mode_restore_pending or self.speed_mode_pending:
                 return
             mode_index = self.speed_mode_index
-        self._set_speed_mode(mode_index, flash=False, origin="восстановление")
+        self._set_speed_mode(mode_index, flash=False, origin=origin)
 
     def _set_speed_mode(self, mode_index: int, flash: bool, origin: str) -> None:
         name, label, vx, vy, yaw, rgb = SPEED_MODES[mode_index]
         if not self.teleop_set.service_is_ready():
-            if origin == "L1":
-                self.get_logger().error("L1: teleop_twist_joy_node не отвечает")
             return
         with self.lock:
             self.speed_mode_pending = True
@@ -985,6 +1009,11 @@ class Dashboard(Node):
             params.append(param)
         if not params:
             return "пустой запрос"
+        enable_pose_mods = Parameter()
+        enable_pose_mods.name = "pose_mods"
+        enable_pose_mods.value.type = ParameterType.PARAMETER_BOOL
+        enable_pose_mods.value.bool_value = True
+        params.append(enable_pose_mods)
         wrote = []
         missing = []
         for controller, client in self.offset_set.items():
@@ -1005,7 +1034,9 @@ class Dashboard(Node):
         if GAIT not in wrote:
             return "neural_controller не запущен"
         with self.lock:
-            self.policy_offsets.update({p.name: p.value.double_value for p in params})
+            self.policy_offsets.update(
+                {p.name: p.value.double_value for p in params if p.name in POLICY_OFFSETS}
+            )
             self.policy_offsets_note = ""
         if missing:
             return None
@@ -1046,6 +1077,8 @@ class Dashboard(Node):
         with self.lock:
             if any(p is None for p in self.joint_pos):
                 return "нет /joint_states"
+            if time.monotonic() - self.joint_t > JOINT_STATE_MAX_AGE:
+                return "данные /joint_states устарели; стойка отменена"
             start = list(self.joint_pos)
             active = [n for n, s in self.controllers.items() if s == "active"]
             self.tg = None
