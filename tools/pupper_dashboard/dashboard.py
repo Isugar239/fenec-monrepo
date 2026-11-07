@@ -286,6 +286,8 @@ JOY_SQUARE = 3
 JOY_L1 = 4
 JOY_R1 = 5
 JOY_R2 = 7
+JOY_DPAD_Y_AXIS = 7
+JOY_DPAD_THRESHOLD = 0.5
 # R2: отпускать уши только после удержания
 JOY_R2_HOLD_S = 0.5
 JOY_SQUARE_HOLD_S = 0.5
@@ -478,6 +480,7 @@ class Dashboard(Node):
         self.joy_r2_off = False
         self.joy_square_since: float | None = None
         self.joy_square_fired = False
+        self.joy_dpad_y = 0
         self.prefs_lock = threading.Lock()
         self.prefs_timer: threading.Timer | None = None
         self.tg_note = ""
@@ -559,6 +562,9 @@ class Dashboard(Node):
         ]
         self.imu_power_pub = self.create_publisher(Bool, "/imu_power", 10)
         self.joy_feedback_pub = self.create_publisher(JoyFeedbackArray, "/joy/set_feedback", 10)
+        self.animation_pub = self.create_publisher(
+            String, "/animation_controller_py/animation_select", 10
+        )
         self.imu_power_on = True
         # transient_local — статус хоуминга и опоздавшим
         self.create_subscription(
@@ -793,6 +799,14 @@ class Dashboard(Node):
         prev = self.joy_prev
         self.joy_prev = buttons
         now = time.monotonic()
+        dpad_axis = msg.axes[JOY_DPAD_Y_AXIS] if JOY_DPAD_Y_AXIS < len(msg.axes) else 0.0
+        dpad_y = (
+            1 if dpad_axis >= JOY_DPAD_THRESHOLD
+            else -1 if dpad_axis <= -JOY_DPAD_THRESHOLD
+            else 0
+        )
+        dpad_rose = self.joy_dpad_y == 0 and dpad_y != 0
+        self.joy_dpad_y = dpad_y
         r2 = JOY_R2 < len(buttons) and bool(buttons[JOY_R2])
         square = JOY_SQUARE < len(buttons) and bool(buttons[JOY_SQUARE])
         if not r2:
@@ -827,6 +841,10 @@ class Dashboard(Node):
             self._cycle_speed_mode()
         elif rose(JOY_R1):
             threading.Thread(target=self._joy_ears_on, daemon=True).start()
+        elif dpad_rose and dpad_y > 0:
+            self._joy_run("прыжок", lambda: self._play_animation("jump"))
+        elif dpad_rose and dpad_y < 0:
+            self._joy_run("посадка назад", lambda: self._play_animation("rear_sit"))
 
     def _joy_run(self, name: str, fn) -> None:
         with self.lock:
@@ -847,6 +865,23 @@ class Dashboard(Node):
     def _joy_ears_on(self) -> None:
         err = self.api_ears("sync")
         self.get_logger().info("джойстик R1 уши: %s" % (err or "ок"))
+
+    def _play_animation(self, name: str) -> str | None:
+        with self.lock:
+            if any(position is None for position in self.joint_pos):
+                return "нет /joint_states"
+            if time.monotonic() - self.joint_t > JOINT_STATE_MAX_AGE:
+                return "данные /joint_states устарели"
+            if self.fall_alarm:
+                return "робот наклонён; анимация отменена"
+            self.stand = None
+            self.tg = None
+            self.demo = None
+        if self.animation_pub.get_subscription_count() == 0:
+            return "animation_controller_py не отвечает"
+        self.stop_motion(name)
+        self.animation_pub.publish(String(data=name))
+        return None
 
     def _cycle_speed_mode(self) -> None:
         with self.lock:

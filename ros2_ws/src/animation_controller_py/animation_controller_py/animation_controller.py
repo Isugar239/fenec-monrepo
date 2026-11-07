@@ -18,6 +18,18 @@ class AnimationControllerPy(Node):
     """Python implementation of animation controller that publishes to forward command controllers."""
 
     ACTION_SIZE = 12
+    DEFAULT_STAND = np.array(
+        [0.26, 0.0, -0.52, -0.26, 0.0, 0.52, 0.26, 0.0, -0.52, -0.26, 0.0, 0.52]
+    )
+    JUMP_CROUCH = np.array(
+        [0.062, 0.0, -0.158, -0.062, 0.0, 0.158, 0.062, 0.0, -0.158, -0.062, 0.0, 0.158]
+    )
+    JUMP_EXTEND = np.array(
+        [0.525, 0.0, -1.020, -0.525, 0.0, 1.020, 0.525, 0.0, -1.020, -0.525, 0.0, 1.020]
+    )
+    REAR_SIT = np.array(
+        [0.446, 0.0, -0.870, -0.446, 0.0, 0.870, 0.016, 0.0, -0.077, -0.016, 0.0, 0.077]
+    )
 
     def __init__(self):
         super().__init__("animation_controller_py")
@@ -142,9 +154,33 @@ class AnimationControllerPy(Node):
             else:
                 self.get_logger().error(f"Failed to load animation: {animation_name}")
                 return False
+        self.animations["jump"] = self._jump_animation()
+        self.animations["rear_sit"] = self._rear_sit_animation()
 
         self.get_logger().info(f"Successfully loaded {len(self.animations)} animations")
         return True
+
+    @staticmethod
+    def _blend(start: np.ndarray, end: np.ndarray, frames: int) -> np.ndarray:
+        phase = np.linspace(0.0, 1.0, frames, endpoint=True)
+        weight = 0.5 - 0.5 * np.cos(np.pi * phase)
+        return start + weight[:, None] * (end - start)
+
+    def _jump_animation(self) -> np.ndarray:
+        """Small simulated jump: crouch, fast extension, then return to stand."""
+        return np.vstack(
+            (
+                self._blend(self.DEFAULT_STAND, self.JUMP_CROUCH, 32),
+                np.repeat(self.JUMP_CROUCH[None, :], 8, axis=0),
+                self._blend(self.JUMP_CROUCH, self.JUMP_EXTEND, 6),
+                np.repeat(self.JUMP_EXTEND[None, :], 8, axis=0),
+                self._blend(self.JUMP_EXTEND, self.DEFAULT_STAND, 32),
+            )
+        )
+
+    def _rear_sit_animation(self) -> np.ndarray:
+        """Lower the rear of the body and leave the controller holding that pose."""
+        return self._blend(self.DEFAULT_STAND, self.REAR_SIT, 60)
 
     def load_animation_csv(self, name: str, csv_path: str) -> bool:
         """Load animation data from a CSV file using pandas."""
